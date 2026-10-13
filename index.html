@@ -7,6 +7,9 @@
 <meta name="description" content="GO GETTER NY manages complex projects from first idea to delivery. Our specialty is technology: sourcing technology hardware, building software into the operating system, and connecting them with routers, SIM cards and hotspots.">
 <meta name="theme-color" content="#101216">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<script>
+  try { if (localStorage.getItem('gg-theme') === 'light') document.documentElement.setAttribute('data-theme', 'light'); } catch (e) {}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&display=swap" rel="stylesheet">
@@ -25,6 +28,26 @@
     --max:1180px;
     --gut:clamp(16px,4vw,40px);
     --head:68px;
+    --amber-ink:#F2B705;
+    --head-bg:rgba(16,18,22,.86);
+    --ghost:#4A505C;
+    --field:#3A404B;
+    --shadow:.35;
+  }
+  :root[data-theme="light"]{
+    color-scheme: light;
+    --bg:#F6F7F9;
+    --bg-2:#EDEFF3;
+    --card:#FFFFFF;
+    --line:#DADDE3;
+    --text:#12151B;
+    --soft:#3A414D;
+    --muted:#646C7A;
+    --amber-ink:#8A6400;
+    --head-bg:rgba(246,247,249,.88);
+    --ghost:#B9BEC8;
+    --field:#C9CED6;
+    --shadow:.12;
   }
   *{box-sizing:border-box;margin:0;padding:0}
   html{scroll-behavior:smooth;scroll-padding-top:calc(var(--head) + 8px)}
@@ -37,23 +60,36 @@
   .wrap{max-width:var(--max);margin:0 auto;padding:0 var(--gut)}
 
   /* header with scroll-filled section links */
-  header.site{position:sticky;top:0;z-index:20;background:rgba(16,18,22,.86);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+  header.site{position:sticky;top:0;z-index:20;background:var(--head-bg);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
   header.site .bar{display:flex;align-items:center;justify-content:space-between;height:var(--head);gap:24px}
   .mark{font-stretch:125%;font-weight:800;font-size:18px;letter-spacing:-.01em;text-decoration:none;display:flex;align-items:center;gap:10px;white-space:nowrap}
   .mark i{width:12px;height:12px;background:var(--amber);border-radius:50%;box-shadow:0 0 0 3px var(--bg),0 0 0 4.5px var(--amber)}
   nav.sections{display:flex;gap:6px}
-  nav.sections a{position:relative;text-decoration:none;color:var(--muted);font-size:15px;font-weight:500;padding:10px 12px;border-radius:8px;transition:color .2s,background .2s}
+  nav.sections a{white-space:nowrap;position:relative;text-decoration:none;color:var(--muted);font-size:15px;font-weight:500;padding:10px 12px;border-radius:8px;transition:color .2s,background .2s}
   nav.sections a::before,nav.sections a::after{content:"";position:absolute;left:12px;right:12px;bottom:3px;height:2px;border-radius:2px}
   nav.sections a::before{background:var(--line)}
   nav.sections a::after{background:var(--amber);transform-origin:left;transform:scaleX(var(--fill,0))}
   nav.sections a:hover{color:var(--text)}
   nav.sections a.active{color:var(--text);background:rgba(242,183,5,.08)}
   .btn{display:inline-flex;align-items:center;justify-content:center;font-family:inherit;font-weight:700;font-size:15px;text-decoration:none;padding:12px 20px;border-radius:999px;border:1.5px solid var(--amber);background:var(--amber);color:#14110A;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s}
-  .btn:hover{background:transparent;color:var(--amber)}
-  .btn.ghost{background:transparent;color:var(--text);border-color:#4A505C}
+  .btn:hover{background:transparent;color:var(--amber-ink)}
+  .btn.ghost{background:transparent;color:var(--text);border-color:var(--ghost)}
   .btn.ghost:hover{border-color:var(--text)}
+  .tools{display:flex;align-items:center;gap:10px}
+  .theme{display:grid;place-items:center;width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:transparent;color:var(--text);cursor:pointer;transition:border-color .15s}
+  .theme:hover{border-color:var(--text)}
+  .theme svg{width:19px;height:19px}
+  .theme .sun{display:none}
+  :root[data-theme="light"] .theme .sun{display:block}
+  :root[data-theme="light"] .theme .moon{display:none}
+  .tech svg .tw{fill:#EDEFF2}
+  :root[data-theme="light"] .tech svg .tw{fill:#B8C0CE}
+  .tech svg .lbl{fill:var(--soft)}
+  .tech svg .lbl.os{fill:var(--amber-ink)}
+  .tech svg .shadow{opacity:var(--shadow)}
+  .btn .short{display:none}
   .mobile-nav{display:none}
-  @media (max-width:900px){
+  @media (max-width:1080px){
     header.site .bar nav.sections{display:none}
     .mobile-nav{display:block;border-top:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
     .mobile-nav::-webkit-scrollbar{display:none}
@@ -61,10 +97,10 @@
     .mobile-nav nav.sections a{font-size:14px;padding:9px 10px}
     html{scroll-padding-top:120px}
   }
-  @media (max-width:420px){header.site .bar .btn{padding:10px 14px;font-size:14px}}
+  @media (max-width:420px){header.site .bar{gap:12px}header.site .bar .btn{padding:10px 14px;font-size:14px}.btn .long{display:none}.btn .short{display:inline}.theme{width:38px;height:38px}.tools{gap:8px}}
 
   /* type */
-  .eyebrow{display:block;font-size:15px;font-weight:600;color:var(--amber);margin-bottom:18px}
+  .eyebrow{display:block;font-size:15px;font-weight:600;color:var(--amber-ink);margin-bottom:18px}
   h1,h2{font-stretch:118%;font-weight:800;letter-spacing:-.03em}
   h2{font-size:clamp(36px,5.6vw,72px);line-height:1;max-width:14ch}
   .lead{font-size:clamp(18px,1.9vw,21px);color:var(--soft);max-width:54ch;margin-top:24px}
@@ -84,14 +120,14 @@
   .map a + a{padding-left:28px;border-left:1px solid var(--line)}
   .map b{display:block;font-stretch:112%;font-size:20px;margin-bottom:6px}
   .map span{color:var(--muted);font-size:15.5px;display:block;max-width:30ch}
-  .map a:hover b{color:var(--amber)}
+  .map a:hover b{color:var(--amber-ink)}
   @media (max-width:760px){.map{grid-template-columns:1fr}.map a,.map a+a{padding:22px 0;border-left:0}.map a+a{border-top:1px solid var(--line)}}
 
   /* project management */
   .steps{list-style:none;counter-reset:s;display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-top:clamp(56px,7vw,88px);position:relative}
   .steps::before{content:"";position:absolute;left:0;right:0;top:19px;height:1px;background:var(--line)}
   .steps li{counter-increment:s;position:relative;padding-right:24px}
-  .steps li::before{content:counter(s);display:grid;place-items:center;width:39px;height:39px;border-radius:50%;background:var(--bg);border:1.5px solid var(--amber);color:var(--amber);font-weight:700;font-size:15px;margin-bottom:20px;position:relative}
+  .steps li::before{content:counter(s);display:grid;place-items:center;width:39px;height:39px;border-radius:50%;background:var(--bg);border:1.5px solid var(--amber);color:var(--amber-ink);font-weight:700;font-size:15px;margin-bottom:20px;position:relative}
   .steps h3{font-size:20px;margin-bottom:8px}
   .steps p{color:var(--muted);font-size:15.5px;max-width:28ch}
   @media (max-width:860px){.steps{grid-template-columns:1fr 1fr;row-gap:40px}.steps::before{display:none}}
@@ -129,7 +165,7 @@
   .vs li{padding:10px 0 10px 28px;border-top:1px solid var(--line);position:relative;font-size:16px;color:var(--soft)}
   .vs li::before{position:absolute;left:0;top:10px;font-weight:700}
   .vs .them li::before{content:"\2013";color:var(--muted)}
-  .vs .ours li::before{content:"\2713";color:var(--amber)}
+  .vs .ours li::before{content:"\2713";color:var(--amber-ink)}
   @media (max-width:760px){.vs{grid-template-columns:1fr}}
 
   .why{display:grid;grid-template-columns:repeat(4,1fr);margin-top:clamp(56px,7vw,88px);border-top:1px solid var(--line)}
@@ -143,7 +179,7 @@
   /* results */
   .proof{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:clamp(56px,7vw,88px)}
   .story{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:clamp(24px,3.4vw,40px)}
-  .fig{font-stretch:125%;font-weight:850;font-size:clamp(64px,8vw,104px);line-height:.88;letter-spacing:-.045em;color:var(--amber)}
+  .fig{font-stretch:125%;font-weight:850;font-size:clamp(64px,8vw,104px);line-height:.88;letter-spacing:-.045em;color:var(--amber-ink)}
   .fig small{font-size:.26em;font-weight:600;letter-spacing:0;font-stretch:100%;margin-left:8px;color:var(--soft)}
   .story h3{font-size:20px;margin:22px 0 10px}
   .story blockquote{color:var(--soft);font-size:16px}
@@ -164,11 +200,11 @@
   .contact .grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:clamp(32px,6vw,80px)}
   .contact .direct{margin-top:36px;display:grid;gap:6px}
   .contact .direct a{font-stretch:112%;font-weight:700;font-size:clamp(22px,2.6vw,30px);text-decoration:none}
-  .contact .direct a:hover{color:var(--amber)}
+  .contact .direct a:hover{color:var(--amber-ink)}
   .contact .direct span{font-size:15px;color:var(--muted)}
   form{display:grid;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:clamp(20px,3vw,32px)}
   label{display:block;font-size:14px;font-weight:600;margin-bottom:6px;color:var(--soft)}
-  input,textarea{width:100%;font:inherit;font-size:16px;padding:12px 14px;border:1px solid #3A404B;border-radius:8px;background:var(--bg);color:var(--text)}
+  input,textarea{width:100%;font:inherit;font-size:16px;padding:12px 14px;border:1px solid var(--field);border-radius:8px;background:var(--bg);color:var(--text)}
   input:focus,textarea:focus{border-color:var(--amber);outline:none}
   textarea{min-height:130px;resize:vertical}
   .note{font-size:14px;min-height:1.4em;color:var(--muted)}
@@ -192,7 +228,13 @@
       <a href="#results">Results</a>
       <a href="#work">How we work</a>
     </nav>
-    <a class="btn" href="#contact">Book a free call</a>
+    <div class="tools">
+      <button class="theme" type="button" id="theme-btn" aria-label="Switch to day mode">
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.2M12 19.8V22M2 12h2.2M19.8 12H22M4.9 4.9l1.6 1.6M17.5 17.5l1.6 1.6M4.9 19.1l1.6-1.6M17.5 6.5l1.6-1.6"/></svg>
+      </button>
+      <a class="btn" href="#contact"><span class="long">Book a free call</span><span class="short">Free call</span></a>
+    </div>
   </div>
   <div class="mobile-nav">
     <nav class="sections" aria-label="Sections">
@@ -265,19 +307,19 @@
 
       <div class="tech">
         <svg viewBox="0 0 640 640" role="img" aria-labelledby="dev-t"><title id="dev-t">Exploded view of a phone: frame, battery, board, display, your platform in the operating system, and glass</title>
-<ellipse cx="290" cy="625" rx="200" ry="14" fill="#000" opacity=".35"/>
+<ellipse class="shadow" cx="290" cy="625" rx="200" ry="14" fill="#000"/>
 <g transform="translate(0 0)"><g transform="translate(290 390) matrix(.866 .5 -.866 .5 0 0)"><rect width="150" height="310" rx="22" fill="#1E222B" stroke="#8A92A0" stroke-width="2"/><rect x="6" y="6" width="138" height="298" rx="17" fill="none" stroke="#343A46" stroke-width="1.5"/><rect x="58" y="282" width="34" height="8" rx="4" fill="#343A46"/></g></g>
 <g transform="translate(0 -73)"><g transform="translate(290 390) matrix(.866 .5 -.866 .5 0 0)"><rect x="22" y="96" width="106" height="150" rx="8" fill="#F2B705"/><rect x="62" y="88" width="26" height="8" rx="2" fill="#8A92A0"/></g></g>
 <g transform="translate(0 -146)"><g transform="translate(290 390) matrix(.866 .5 -.866 .5 0 0)"><rect x="6" y="6" width="138" height="298" rx="16" fill="#26355E" stroke="#3E4C78" stroke-width="1.5"/><rect x="18" y="18" width="46" height="34" rx="3" fill="#9AA6BF"/><rect x="74" y="20" width="58" height="22" rx="3" fill="#7F93BF"/><rect x="22" y="64" width="28" height="28" rx="3" fill="#F2B705"/><rect x="60" y="64" width="72" height="12" rx="3" fill="#7F93BF"/><rect x="60" y="82" width="48" height="10" rx="3" fill="#9AA6BF"/><path d="M14 290 H136 M14 280 H60" stroke="#F2B705" stroke-width="2.5" fill="none" stroke-linecap="round"/></g></g>
 <g transform="translate(0 -219)"><g transform="translate(290 390) matrix(.866 .5 -.866 .5 0 0)"><rect x="3" y="3" width="144" height="304" rx="20" fill="#07080A" stroke="#343A46" stroke-width="1.5"/></g></g>
-<g transform="translate(0 -292)"><g transform="translate(290 390) matrix(.866 .5 -.866 .5 0 0)"><rect x="18" y="16" width="114" height="8" rx="4" fill="#7F93BF" opacity=".7"/><rect x="20" y="44" width="26" height="26" rx="7" fill="#F2B705"/><rect x="62" y="44" width="26" height="26" rx="7" fill="#EDEFF2"/><rect x="104" y="44" width="26" height="26" rx="7" fill="#7F93BF"/><rect x="20" y="86" width="26" height="26" rx="7" fill="#EDEFF2"/><rect x="62" y="86" width="26" height="26" rx="7" fill="#7F93BF"/><rect x="104" y="86" width="26" height="26" rx="7" fill="#F2B705"/><rect x="20" y="128" width="26" height="26" rx="7" fill="#7F93BF"/><rect x="62" y="128" width="26" height="26" rx="7" fill="#EDEFF2"/><rect x="104" y="128" width="26" height="26" rx="7" fill="#EDEFF2"/><rect x="20" y="170" width="26" height="26" rx="7" fill="#F2B705"/><rect x="62" y="170" width="26" height="26" rx="7" fill="#EDEFF2"/><rect x="104" y="170" width="26" height="26" rx="7" fill="#7F93BF"/><rect x="20" y="252" width="110" height="30" rx="10" fill="#EDEFF2" opacity=".14"/></g></g>
+<g transform="translate(0 -292)"><g transform="translate(290 390) matrix(.866 .5 -.866 .5 0 0)"><rect x="18" y="16" width="114" height="8" rx="4" fill="#7F93BF" opacity=".7"/><rect x="20" y="44" width="26" height="26" rx="7" fill="#F2B705"/><rect x="62" y="44" width="26" height="26" rx="7" class="tw"/><rect x="104" y="44" width="26" height="26" rx="7" fill="#7F93BF"/><rect x="20" y="86" width="26" height="26" rx="7" class="tw"/><rect x="62" y="86" width="26" height="26" rx="7" fill="#7F93BF"/><rect x="104" y="86" width="26" height="26" rx="7" fill="#F2B705"/><rect x="20" y="128" width="26" height="26" rx="7" fill="#7F93BF"/><rect x="62" y="128" width="26" height="26" rx="7" class="tw"/><rect x="104" y="128" width="26" height="26" rx="7" class="tw"/><rect x="20" y="170" width="26" height="26" rx="7" fill="#F2B705"/><rect x="62" y="170" width="26" height="26" rx="7" class="tw"/><rect x="104" y="170" width="26" height="26" rx="7" fill="#7F93BF"/><rect x="20" y="252" width="110" height="30" rx="10" fill="#EDEFF2" opacity=".14"/></g></g>
 <g transform="translate(0 -365)"><g transform="translate(290 390) matrix(.866 .5 -.866 .5 0 0)"><rect width="150" height="310" rx="22" fill="#FFFFFF" fill-opacity=".05" stroke="#9AA1AD" stroke-width="1.5"/><polygon points="14,40 52,10 74,10 14,72" fill="#FFFFFF" opacity=".12"/></g></g>
-<g><line x1="424" y1="465" x2="470" y2="465" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="465" r="3.5" fill="#F2B705"/><text x="478" y="469" font-size="13" font-weight="500" fill="#C9CED6" font-family="Archivo, sans-serif">Frame and SIM tray</text></g>
-<g><line x1="424" y1="392" x2="470" y2="392" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="392" r="3.5" fill="#F2B705"/><text x="478" y="396" font-size="13" font-weight="500" fill="#C9CED6" font-family="Archivo, sans-serif">Battery</text></g>
-<g><line x1="424" y1="319" x2="470" y2="319" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="319" r="3.5" fill="#F2B705"/><text x="478" y="323" font-size="13" font-weight="500" fill="#C9CED6" font-family="Archivo, sans-serif">Board and 5G modem</text></g>
-<g><line x1="424" y1="246" x2="470" y2="246" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="246" r="3.5" fill="#F2B705"/><text x="478" y="250" font-size="13" font-weight="500" fill="#C9CED6" font-family="Archivo, sans-serif">Display</text></g>
-<g><line x1="424" y1="173" x2="470" y2="173" stroke="#F2B705" stroke-dasharray="2 3"/><circle cx="424" cy="173" r="3.5" fill="#F2B705"/><text x="478" y="177" font-size="14" font-weight="700" fill="#F2B705" font-family="Archivo, sans-serif">Your platform, in the OS</text></g>
-<g><line x1="424" y1="100" x2="470" y2="100" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="100" r="3.5" fill="#F2B705"/><text x="478" y="104" font-size="13" font-weight="500" fill="#C9CED6" font-family="Archivo, sans-serif">Glass</text></g>
+<g><line x1="424" y1="465" x2="470" y2="465" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="465" r="3.5" fill="#F2B705"/><text class="lbl" x="478" y="469" font-size="13" font-weight="500" font-family="Archivo, sans-serif">Frame and SIM tray</text></g>
+<g><line x1="424" y1="392" x2="470" y2="392" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="392" r="3.5" fill="#F2B705"/><text class="lbl" x="478" y="396" font-size="13" font-weight="500" font-family="Archivo, sans-serif">Battery</text></g>
+<g><line x1="424" y1="319" x2="470" y2="319" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="319" r="3.5" fill="#F2B705"/><text class="lbl" x="478" y="323" font-size="13" font-weight="500" font-family="Archivo, sans-serif">Board and 5G modem</text></g>
+<g><line x1="424" y1="246" x2="470" y2="246" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="246" r="3.5" fill="#F2B705"/><text class="lbl" x="478" y="250" font-size="13" font-weight="500" font-family="Archivo, sans-serif">Display</text></g>
+<g><line x1="424" y1="173" x2="470" y2="173" stroke="#F2B705" stroke-dasharray="2 3"/><circle cx="424" cy="173" r="3.5" fill="#F2B705"/><text class="lbl os" x="478" y="177" font-size="14" font-weight="700" font-family="Archivo, sans-serif">Your platform, in the OS</text></g>
+<g><line x1="424" y1="100" x2="470" y2="100" stroke="#5A6170" stroke-dasharray="2 3"/><circle cx="424" cy="100" r="3.5" fill="#F2B705"/><text class="lbl" x="478" y="104" font-size="13" font-weight="500" font-family="Archivo, sans-serif">Glass</text></g>
 </svg>
         <ul class="svc">
           <li><h3>Device sourcing</h3><p>Technology hardware from manufacturers in China, Samsung and other brands. We specify, sample and quality-check every device with the factory.</p><div class="tags"><span>Technology hardware</span><span>Samples</span><span>Factory audits</span></div></li>
@@ -412,6 +454,24 @@
     window.addEventListener('scroll', function () { if (!ticking) { ticking = true; requestAnimationFrame(update); } }, { passive: true });
     window.addEventListener('resize', update);
     update();
+  })();
+
+  (function () {
+    var root = document.documentElement, btn = document.getElementById('theme-btn');
+    var meta = document.querySelector('meta[name="theme-color"]');
+    function sync() {
+      var light = root.getAttribute('data-theme') === 'light';
+      btn.setAttribute('aria-label', light ? 'Switch to night mode' : 'Switch to day mode');
+      btn.setAttribute('title', light ? 'Night mode' : 'Day mode');
+      meta.setAttribute('content', light ? '#F6F7F9' : '#101216');
+    }
+    btn.addEventListener('click', function () {
+      var light = root.getAttribute('data-theme') !== 'light';
+      if (light) { root.setAttribute('data-theme', 'light'); } else { root.removeAttribute('data-theme'); }
+      try { localStorage.setItem('gg-theme', light ? 'light' : 'dark'); } catch (e) {}
+      sync();
+    });
+    sync();
   })();
 
   document.getElementById('yr').textContent = new Date().getFullYear();
