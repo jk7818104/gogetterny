@@ -202,12 +202,13 @@
   .contact .direct a{font-stretch:112%;font-weight:700;font-size:clamp(22px,2.6vw,30px);text-decoration:none}
   .contact .direct a:hover{color:var(--amber-ink)}
   .contact .direct span{font-size:15px;color:var(--muted)}
-  form{display:grid;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:clamp(20px,3vw,32px)}
+  form{position:relative;display:grid;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:clamp(20px,3vw,32px)}
   label{display:block;font-size:14px;font-weight:600;margin-bottom:6px;color:var(--soft)}
   input,textarea{width:100%;font:inherit;font-size:16px;padding:12px 14px;border:1px solid var(--field);border-radius:8px;background:var(--bg);color:var(--text)}
   input:focus,textarea:focus{border-color:var(--amber);outline:none}
   textarea{min-height:130px;resize:vertical}
   .note{font-size:14px;min-height:1.4em;color:var(--muted)}
+  .btn:disabled{opacity:.7;cursor:default}
   @media (max-width:820px){.contact .grid{grid-template-columns:1fr}}
 
   footer{padding:36px 0;font-size:14px;color:var(--muted);border-top:1px solid var(--line)}
@@ -398,6 +399,7 @@
         </div>
       </div>
       <form id="contact-form" novalidate>
+        <input type="text" name="_honey" tabindex="-1" autocomplete="off" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
         <div><label for="f-name">Your name</label><input id="f-name" name="name" autocomplete="name" required></div>
         <div><label for="f-email">Email</label><input id="f-email" name="email" type="email" autocomplete="email" required></div>
         <div><label for="f-phone">Phone</label><input id="f-phone" name="phone" type="tel" autocomplete="tel"></div>
@@ -477,12 +479,30 @@
   document.getElementById('yr').textContent = new Date().getFullYear();
   document.getElementById('contact-form').addEventListener('submit', function (e) {
     e.preventDefault();
-    var f = e.target, note = document.getElementById('f-note');
+    var f = e.target, note = document.getElementById('f-note'), btn = f.querySelector('button[type=submit]');
     var name = f.name.value.trim(), email = f.email.value.trim(), msg = f.message.value.trim();
     if (!name || !email || !msg) { note.textContent = 'Please fill in your name, email and project.'; return; }
-    var body = 'Name: ' + name + '\nEmail: ' + email + '\nPhone: ' + f.phone.value.trim() + '\n\n' + msg;
-    window.location.href = 'mailto:office@gogetterinc.com?subject=' + encodeURIComponent('New project from ' + name) + '&body=' + encodeURIComponent(body);
-    note.textContent = 'Your email app is opening with the message ready to send.';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { note.textContent = 'Please enter a valid email address.'; f.email.focus(); return; }
+    if (f._honey.value) return;
+    btn.disabled = true; btn.textContent = 'Sending\u2026'; note.textContent = '';
+    fetch('https://formsubmit.co/ajax/office@gogetterinc.com', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({
+        _subject: 'New project from ' + name + ' (gogetterinc.com)',
+        _template: 'table',
+        _replyto: email,
+        Name: name, Email: email, Phone: f.phone.value.trim(), Project: msg
+      })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (String(d.success) !== 'true') throw new Error(d.message || 'failed');
+      f.reset();
+      note.textContent = 'Thanks, ' + name + '. Your message was sent, and we reply within 24 hours.';
+      btn.textContent = 'Message sent';
+    }).catch(function () {
+      note.textContent = "Your message didn't send. Please email office@gogetterinc.com or call 845-395-5431.";
+      btn.disabled = false; btn.textContent = 'Send message';
+    });
   });
 </script>
 </body>
