@@ -499,19 +499,13 @@
     var name = f.name.value.trim(), email = f.email.value.trim(), msg = f.message.value.trim();
     if (!name || !email || !msg) { note.textContent = 'Please fill in your name, email and project.'; return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { note.textContent = 'Please enter a valid email address.'; f.email.focus(); return; }
-    if (f._honey.value) return;
     btn.disabled = true; btn.textContent = 'Sending\u2026'; note.textContent = '';
-    fetch('https://formsubmit.co/ajax/office@gogetterinc.com', {
+    fetch('/api/contact', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({
-        _subject: 'New project from ' + name + ' (gogetterinc.com)',
-        _template: 'table',
-        _replyto: email,
-        Name: name, Email: email, Phone: f.phone.value.trim(), Project: msg
-      })
+      body: JSON.stringify({ name: name, email: email, phone: f.phone.value.trim(), message: msg, _honey: f._honey.value })
     }).then(function (r) { return r.json(); }).then(function (d) {
-      if (String(d.success) !== 'true') throw new Error(d.message || 'failed');
+      if (!d || d.ok !== true) throw new Error((d && d.error) || 'failed');
       f.reset();
       note.textContent = 'Thanks, ' + name + '. Your message was sent, and we reply within 24 hours.';
       btn.textContent = 'Message sent';
