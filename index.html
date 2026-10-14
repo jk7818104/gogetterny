@@ -3,15 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GO GETTER NY | Project Management &amp; Technology</title>
-<meta name="description" content="GO GETTER NY manages complex projects from first idea to delivery. Our specialty is technology: sourcing technology hardware, building software into the operating system, and connecting them with routers, SIM cards and hotspots.">
+<title>GO GETTER | Project Management &amp; Technology</title>
+<meta name="description" content="GO GETTER manages complex projects from first idea to delivery. Our specialty is technology: sourcing technology hardware, building software into the operating system, and connecting them with routers, SIM cards and hotspots.">
 <meta name="theme-color" content="#101216">
 <link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="icon" href="favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="canonical" href="https://gogetterinc.com/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://gogetterinc.com/">
-<meta property="og:site_name" content="GO GETTER NY">
-<meta property="og:title" content="GO GETTER NY | From vision to action">
+<meta property="og:site_name" content="GO GETTER">
+<meta property="og:title" content="GO GETTER | From vision to action">
 <meta property="og:description" content="We get complex projects done. Project management, with a specialty in technology hardware, operating systems and connectivity.">
 <meta property="og:image" content="https://gogetterinc.com/og.png">
 <meta property="og:image:width" content="1200">
@@ -78,8 +80,8 @@
   /* header with scroll-filled section links */
   header.site{position:sticky;top:0;z-index:20;background:var(--head-bg);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
   header.site .bar{display:flex;align-items:center;justify-content:space-between;height:var(--head);gap:24px}
-  .mark{font-stretch:125%;font-weight:800;font-size:18px;letter-spacing:-.01em;text-decoration:none;display:flex;align-items:center;gap:10px;white-space:nowrap}
-  .mark i{width:12px;height:12px;background:var(--amber);border-radius:50%;box-shadow:0 0 0 3px var(--bg),0 0 0 4.5px var(--amber)}
+  .mark{display:flex;align-items:center;color:var(--text);text-decoration:none;flex:none}
+  .mark svg{height:28px;width:auto;display:block}
   nav.sections{display:flex;gap:6px}
   nav.sections a{white-space:nowrap;position:relative;text-decoration:none;color:var(--muted);font-size:15px;font-weight:500;padding:10px 12px;border-radius:8px;transition:color .2s,background .2s}
   nav.sections a::before,nav.sections a::after{content:"";position:absolute;left:12px;right:12px;bottom:3px;height:2px;border-radius:2px}
@@ -238,7 +240,7 @@
 
 <header class="site">
   <div class="wrap bar">
-    <a class="mark" href="#top"><i aria-hidden="true"></i>GO GETTER NY</a>
+    <a class="mark" href="#top" aria-label="GO GETTER, back to top"><svg viewBox="0 0 389.94 85.06" height="30" aria-hidden="true" focusable="false"><path transform="translate(-4.36 85.06)" d="M37.34 1.49Q21.32 1.49 12.84 -9.47Q4.36 -20.42 4.36 -42.66Q4.36 -57.7 8.55 -67.45Q12.74 -77.21 20.83 -82Q28.92 -86.8 40.66 -86.8Q48.36 -86.8 54.52 -84.79Q60.68 -82.79 65.07 -78.76Q69.45 -74.73 71.78 -68.65Q74.11 -62.58 74.11 -54.44H50.8Q50.8 -57.08 50.23 -59.36Q49.66 -61.63 48.41 -63.34Q47.16 -65.05 45.26 -66.02Q43.37 -66.99 40.63 -66.99Q37.35 -66.99 35.1 -65.89Q32.84 -64.8 31.53 -62.64Q30.21 -60.49 29.66 -57.3Q29.12 -54.11 29.12 -49.89V-35.42Q29.12 -29.71 30.19 -25.92Q31.25 -22.13 33.82 -20.23Q36.39 -18.32 40.8 -18.32Q44.24 -18.32 46.51 -19.87Q48.78 -21.41 49.95 -24.02Q51.12 -26.62 51.12 -29.68V-30.26H39.04V-47.62H74.11V0H61.6L59.85 -8.11Q57.56 -5.29 54.44 -3.14Q51.32 -0.99 47.13 0.25Q42.94 1.49 37.34 1.49Z" fill="currentColor"/><circle cx="118.09" cy="42.53" r="43.38" fill="#F2B705"/><path d="M110.28 23.44 L139.78 42.53 L110.28 61.62 Z" style="fill:var(--bg)"/><path transform="translate(175.48 85.06)" d="M19.25 0.77Q10.94 0.77 6.67 -4.83Q2.41 -10.43 2.41 -21.99Q2.41 -29.76 4.49 -34.79Q6.57 -39.82 10.64 -42.29Q14.71 -44.76 20.64 -44.76Q24.44 -44.76 27.5 -43.74Q30.56 -42.72 32.74 -40.68Q34.93 -38.64 36.09 -35.55Q37.25 -32.47 37.25 -28.34H27.22Q27.22 -30.11 26.82 -31.55Q26.42 -32.99 25.59 -34.03Q24.76 -35.07 23.52 -35.62Q22.27 -36.18 20.56 -36.18Q18.53 -36.18 17.07 -35.49Q15.61 -34.8 14.7 -33.39Q13.78 -31.98 13.37 -29.87Q12.96 -27.75 12.96 -24.88V-19.04Q12.96 -15.21 13.72 -12.71Q14.48 -10.22 16.14 -9.01Q17.81 -7.81 20.49 -7.81Q22.85 -7.81 24.36 -8.8Q25.88 -9.79 26.63 -11.58Q27.39 -13.38 27.39 -15.76V-16.31H19.56V-24.03H37.21V0H31.56L30.79 -4.36Q29.58 -2.79 27.94 -1.64Q26.3 -0.48 24.17 0.14Q22.04 0.77 19.25 0.77Z M43.85 0V-43.99H72.25V-35.38H54.19V-26.63H69.71V-18.09H54.19V-8.61H72.59V0H43.85Z M86.48 0V-35.22H75.74V-43.99H107.51V-35.22H96.83V0H86.48Z M120.53 0V-35.22H109.79V-43.99H141.56V-35.22H130.88V0H120.53Z M146.31 0V-43.99H174.72V-35.38H156.66V-26.63H172.18V-18.09H156.66V-8.61H175.05V0H146.31Z M180.64 0V-43.99H199.08Q203.96 -43.99 206.84 -42.21Q209.72 -40.44 211 -37.41Q212.28 -34.38 212.28 -30.63Q212.28 -26.65 211 -23.47Q209.73 -20.28 206.99 -18.39L213.73 0H202.71L197.44 -15.56H190.99V0H180.64ZM190.99 -23.71H197.45Q199.77 -23.71 200.81 -25.44Q201.85 -27.16 201.85 -29.9Q201.85 -31.71 201.39 -32.99Q200.93 -34.27 199.95 -34.96Q198.98 -35.66 197.33 -35.66H190.99V-23.71Z" fill="currentColor"/></svg></a>
     <nav class="sections" aria-label="Sections">
       <a href="#projects">Project management</a>
       <a href="#technology">Technology</a>
@@ -269,7 +271,7 @@
     <div class="wrap">
       <h1>From vision to action.</h1>
       <p class="tag">We get complex projects done.</p>
-      <p class="lead">GO GETTER NY manages projects from first idea to delivery, for businesses, organizations and institutions. Our specialty: we source technology hardware, build software into its operating system, and connect it.</p>
+      <p class="lead">GO GETTER manages projects from first idea to delivery, for businesses, organizations and institutions. Our specialty: we source technology hardware, build software into its operating system, and connect it.</p>
       <div class="ctas">
         <a class="btn" href="#contact">Book a free call</a>
         <a class="btn ghost" href="#projects">See what we do</a>
@@ -429,7 +431,7 @@
 
 <footer>
   <div class="wrap">
-    <span>&copy; <span id="yr">2026</span> GO GETTER NY. From vision to action.</span>
+    <span>&copy; <span id="yr">2026</span> GO GETTER INC. From vision to action.</span>
     <span>New York, NY</span>
   </div>
 </footer>
@@ -507,7 +509,7 @@
       body: JSON.stringify({
         access_key: '26bf2a5b-4763-4e2f-874e-8d6387dd4ca3',
         subject: 'New project from ' + name + ' (gogetterinc.com)',
-        from_name: 'GO GETTER NY Website',
+        from_name: 'GO GETTER Website',
         replyto: email,
         botcheck: f._honey.value,
         Name: name, Email: email, Phone: f.phone.value.trim(), Project: msg
