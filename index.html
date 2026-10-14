@@ -499,13 +499,21 @@
     var name = f.name.value.trim(), email = f.email.value.trim(), msg = f.message.value.trim();
     if (!name || !email || !msg) { note.textContent = 'Please fill in your name, email and project.'; return; }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { note.textContent = 'Please enter a valid email address.'; f.email.focus(); return; }
+    if (f._honey.value) return;
     btn.disabled = true; btn.textContent = 'Sending\u2026'; note.textContent = '';
-    fetch('/api/contact', {
+    fetch('https://api.web3forms.com/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body: JSON.stringify({ name: name, email: email, phone: f.phone.value.trim(), message: msg, _honey: f._honey.value })
+      body: JSON.stringify({
+        access_key: '26bf2a5b-4763-4e2f-874e-8d6387dd4ca3',
+        subject: 'New project from ' + name + ' (gogetterinc.com)',
+        from_name: 'GO GETTER NY Website',
+        replyto: email,
+        botcheck: f._honey.value,
+        Name: name, Email: email, Phone: f.phone.value.trim(), Project: msg
+      })
     }).then(function (r) { return r.json(); }).then(function (d) {
-      if (!d || d.ok !== true) throw new Error((d && d.error) || 'failed');
+      if (!d || d.success !== true) throw new Error((d && d.message) || 'failed');
       f.reset();
       note.textContent = 'Thanks, ' + name + '. Your message was sent, and we reply within 24 hours.';
       btn.textContent = 'Message sent';
