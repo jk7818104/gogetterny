@@ -515,8 +515,11 @@
       f.reset();
       note.textContent = 'Thanks, ' + name + '. Your message was sent, and we reply within 24 hours.';
       btn.textContent = 'Message sent';
-    }).catch(function () {
-      note.textContent = "Your message didn't send. Please email office@gogetterinc.com or call 845-395-5431.";
+    }).catch(function (err) {
+      if (window.console) console.warn('Contact form:', err && err.message);
+      var body = 'Name: ' + name + '\nEmail: ' + email + '\nPhone: ' + f.phone.value.trim() + '\n\n' + msg;
+      var href = 'mailto:office@gogetterinc.com?subject=' + encodeURIComponent('New project from ' + name) + '&body=' + encodeURIComponent(body);
+      note.innerHTML = "Your message didn't send. <a href=\"" + href + "\">Send it by email instead</a> or call 845-395-5431.";
       btn.disabled = false; btn.textContent = 'Send message';
     });
   });
