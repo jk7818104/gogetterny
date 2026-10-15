@@ -415,13 +415,15 @@
   @keyframes mk-draw{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}
 
   /* who we work with: coloured chips */
-  .who{display:flex;flex-wrap:wrap;align-items:center;gap:10px;max-width:none}
-  .who b{margin-right:6px}
-  .chip{display:inline-block;padding:7px 14px;border-radius:8px;font-size:14.5px;font-weight:600;color:var(--text);background:rgba(var(--cc),.12);border:1px solid rgba(var(--cc),.38)}
+  .who{display:flex;flex-wrap:nowrap;align-items:stretch;gap:10px;max-width:none}
+  .who b{flex:none;align-self:center;margin-right:6px}
+  .chip{flex:1 1 auto;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.3;padding:8px 14px;border-radius:8px;font-size:14.5px;font-weight:600;color:var(--text);background:rgba(var(--cc),.12);border:1px solid rgba(var(--cc),.38)}
   .chip:nth-of-type(1){--cc:242,183,5}
   .chip:nth-of-type(2){--cc:34,195,166}
   .chip:nth-of-type(3){--cc:255,107,87}
   .chip:nth-of-type(4){--cc:140,123,255}
+  @media (max-width:1000px){.who{flex-wrap:wrap}.who b{flex-basis:100%}.chip{flex-basis:calc(50% - 5px)}}
+  @media (max-width:560px){.chip{flex-basis:100%}}
   .svc .tags span{transition:border-color .3s,color .3s}
   .svc li.in .tags span{border-color:rgba(63,182,242,.45);color:var(--soft)}
 
