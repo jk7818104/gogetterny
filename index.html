@@ -1018,6 +1018,11 @@
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { note.textContent = 'Please enter a valid email address.'; f.email.focus(); return; }
     if (f._honey.value) return;
     btn.disabled = true; btn.textContent = 'Sending\u2026'; note.textContent = '';
+    // also save it as a lead in the admin (quietly; the email below is still the main path)
+    try {
+      fetch('/api/lead', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name, email: email, phone: f.phone.value.trim(), message: msg, website: f._honey.value }) }).catch(function () {});
+    } catch (e2) {}
     fetch('https://api.web3forms.com/submit', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
