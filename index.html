@@ -715,7 +715,7 @@
         var y0 = window.scrollY, dy = y - y0, t0 = performance.now();
         (function f(n) {
           if (id !== runId) return res(false);
-          var k = Math.min(1, (n - t0) / ms), e = k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+          var k = Math.min(1, (n - t0) / ms), e = -(Math.cos(Math.PI * k) - 1) / 2;
           window.scrollTo({ top: y0 + dy * e, behavior: 'instant' });
           if (k < 1) requestAnimationFrame(f); else res(true);
         })(t0);
@@ -730,7 +730,7 @@
         if (k < 1) requestAnimationFrame(f);
       })(t0);
     }
-    // one calm, continuous glide down the page; each part reveals itself as it comes into view
+    // page by page: glide to a screenful, let it settle long enough to read, then move on
     var sections = ['projects', 'technology', 'results', 'work', 'contact', 'finale'];
     var names = { projects: 'Project management', technology: 'Technology', results: 'Results', work: 'How we work', contact: 'Contact', finale: 'GO GETTER' };
     var triggers = [
@@ -741,45 +741,64 @@
       { sec: 'work', at: '.ways', cls: 'show' },
       { sec: 'contact', at: '.grid', cls: 'show' }
     ];
-    var SPEED = 85; // px per second
+    function absTop(el) { return el.getBoundingClientRect().top + window.scrollY; }
+    function words(el) { return (el.innerText || '').trim().split(/\s+/).filter(Boolean).length; }
+    function buildFrames(head) {
+      var avail = window.innerHeight - head - 110, frames = [];
+      sections.forEach(function (sid) {
+        var sec = document.getElementById(sid), wrap = sec.querySelector('.wrap');
+        var blocks = (sid === 'contact' || sid === 'finale') ? [wrap] : Array.prototype.slice.call(wrap.children);
+        blocks = blocks.filter(function (b) { return b.offsetHeight > 0; });
+        var i = 0;
+        while (i < blocks.length) {
+          var top = absTop(blocks[i]), end = top + avail, j = i, w = 0;
+          while (j < blocks.length && absTop(blocks[j]) + blocks[j].offsetHeight <= end) { w += words(blocks[j]); j++; }
+          if (j === i) {
+            var bt = top, bb = top + blocks[i].offsetHeight, bw = words(blocks[i]), n = Math.ceil((bb - bt) / (avail * 0.85));
+            for (var k = 0; k < n; k++) frames.push({ sec: sid, y: bt + k * avail * 0.85, words: Math.round(bw / n), els: [blocks[i]] });
+            i++;
+          } else {
+            frames.push({ sec: sid, y: top, words: w, els: blocks.slice(i, j) });
+            i = j;
+          }
+        }
+      });
+      return frames;
+    }
     function startTour() {
       if (touring) return;
       touring = true; var id = ++runId;
       root.classList.add('tour');
       segs.forEach(function (sg, i) { sg.style.setProperty('--p', 0); sg.style.setProperty('--sc', colors[i]); });
-      var fired = {};
-      var y = window.scrollY, last = performance.now(), t0 = last, endAt = 0;
       var head = document.querySelector('header.site').offsetHeight;
-      (function frame(now) {
-        if (id !== runId) return;
-        var dt = Math.min(0.05, (now - last) / 1000); last = now;
-        var ramp = Math.min(1, (now - t0) / 1800); ramp = ramp * ramp * (3 - 2 * ramp);
-        var max = document.documentElement.scrollHeight - window.innerHeight;
-        y = Math.min(max, y + SPEED * ramp * dt);
-        window.scrollTo({ top: y, behavior: 'instant' });
-        var vh = window.innerHeight;
-        triggers.forEach(function (t, i) {
-          if (fired[i]) return;
-          var sec = document.getElementById(t.sec), el = sec.querySelector(t.at);
-          if (el.getBoundingClientRect().top < vh * 0.82) {
-            fired[i] = true; sec.classList.add(t.cls);
-            if (t.tech) { var dv = el.querySelector('svg'); if (dv) { dv.style.setProperty('--t', 0); animT(dv, 3200, id); } }
-          }
-        });
-        var cur = null;
-        sections.forEach(function (sid, i) {
-          var r = document.getElementById(sid).getBoundingClientRect();
-          var p = Math.min(1, Math.max(0, (head + vh * 0.5 - r.top) / r.height));
-          segs[i].style.setProperty('--p', p.toFixed(3));
-          if (r.top < head + vh * 0.5 && r.bottom > head + vh * 0.5) cur = sid;
-        });
-        nowEl.textContent = cur ? names[cur] : 'GO GETTER';
-        if (y >= max - 1) {
-          if (!endAt) endAt = now;
-          if (now - endAt > 3000) { touring = false; root.classList.remove('tour'); return; }
+      var frames = buildFrames(head), fired = {};
+      var max = document.documentElement.scrollHeight - window.innerHeight;
+      (async function run() {
+        for (var f = 0; f < frames.length; f++) {
+          var fr = frames[f];
+          var y = Math.max(0, Math.min(max, fr.y - head - 28));
+          var si = sections.indexOf(fr.sec);
+          nowEl.textContent = names[fr.sec];
+          if (!(await glide(y, 1150, id))) return;
+          // reveal what this screen holds
+          triggers.forEach(function (t, i) {
+            if (fired[i]) return;
+            var sec = document.getElementById(t.sec), el = sec.querySelector(t.at), r = el.getBoundingClientRect();
+            if (r.top < window.innerHeight * 0.55) {
+              fired[i] = true; sec.classList.add(t.cls);
+              if (t.tech) { var dv = el.querySelector('svg'); if (dv) { dv.style.setProperty('--t', 0); animT(dv, 2600, id); } }
+            }
+          });
+          for (var k = 0; k < si; k++) segs[k].style.setProperty('--p', 1);
+          var inSec = frames.filter(function (x) { return x.sec === fr.sec; }), pos = inSec.indexOf(fr) + 1;
+          segs[si].style.setProperty('--p', (pos / inSec.length).toFixed(3));
+          // reading time: a steady base plus time per word
+          var dwell = Math.max(3400, Math.min(9500, 2200 + fr.words * 170));
+          if (fr.els.some(function (e) { return e.classList && e.classList.contains('tech'); })) dwell += 1500;
+          if (!(await wait(dwell, id))) return;
         }
-        requestAnimationFrame(frame);
-      })(last);
+        touring = false; root.classList.remove('tour');
+      })();
     }
     document.getElementById('tour-stop').addEventListener('click', stopTour);
     ['wheel', 'touchstart', 'keydown'].forEach(function (ev) {
