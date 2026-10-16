@@ -1,8 +1,12 @@
 // @ts-check
 // Everything the admin screen can do. Each op takes the request body (and the request) and returns JSON.
 import { q, one } from './db.js';
-import { stripe, stripeKey } from './stripe.js';
+import { stripe, stripeKey, testMode } from './stripe.js';
 import { HttpError, str, cents, intId, day, email, origin } from './http.js';
+import { getSettings, saveSettings, getKV, setKV } from './settings.js';
+import { emailReady, fromAddress, sendEmail } from './email.js';
+import { testEmail } from './templates.js';
+import { emailInvoiceDoc } from './docs.js';
 
 const TZ = 'America/New_York';
 
@@ -90,10 +94,13 @@ function mapInvoice(i, names) {
     created: i.created * 1000, due_date: i.due_date ? i.due_date * 1000 : null,
     customer: cust, client_id: names[cust]?.id || null,
     name: names[cust]?.name || i.customer_name || i.customer_email || 'Customer',
-    email: i.customer_email, url: i.hosted_invoice_url || null, pdf: i.invoice_pdf || null,
+    email: i.customer_email, url: i.hosted_invoice_url || null, pdf: '/api/invoice-pdf?id=' + encodeURIComponent(i.id),
     memo: i.description || '',
     lines: (i.lines?.data || []).map((/** @type {any} */ l) => ({ description: l.description, amount: l.amount })),
     plan: !!(i.parent && i.parent.subscription_details),
+    bank: (i.payment_settings?.payment_method_types || []).includes('us_bank_account'),
+    remind: i.metadata?.gg_remind === '1',
+    extras: (i.custom_fields || []).map((/** @type {any} */ f) => `${f.name}: ${f.value}`).join(' · '),
     overdue: i.status === 'open' && !!i.due_date && i.due_date * 1000 < Date.now()
   };
 }
@@ -101,12 +108,14 @@ function mapInvoice(i, names) {
 function mapCharge(c, names) {
   const cust = idOf(c.customer);
   const card = c.payment_method_details?.card;
+  const bank = c.payment_method_details?.us_bank_account;
   return {
     id: c.id, amount: c.amount, refunded: c.amount_refunded, status: c.status,
     created: c.created * 1000, description: c.description || '',
     customer: cust, client_id: names[cust]?.id || null,
     name: names[cust]?.name || c.billing_details?.name || c.billing_details?.email || 'Customer',
-    card: card ? `${(card.brand || 'card').toUpperCase()} •••• ${card.last4}` : (c.payment_method_details?.type || ''),
+    card: card ? `${(card.brand || 'card').toUpperCase()} •••• ${card.last4}`
+      : bank ? `${bank.bank_name || 'Bank'} •••• ${bank.last4 || ''}`.trim() : (c.payment_method_details?.type || ''),
     receipt: c.receipt_url || null, failure: c.failure_message || null
   };
 }
@@ -205,6 +214,14 @@ async function invoicesList(/** @type {any} */ b) {
   return { invoices: inv.data.map((i) => mapInvoice(i, names)) };
 }
 
+/** Email a finalized invoice: from GO GETTER when email is connected, otherwise through Stripe. @param {any} inv @param {any} settings */
+async function emailInvoice(inv, settings) {
+  if (emailReady() && settings.invoices_from_us) {
+    return { inv: await emailInvoiceDoc(inv.id, settings, 'invoice'), via: 'from GO GETTER (PDF attached)' };
+  }
+  return { inv: await stripe().invoices.sendInvoice(inv.id), via: 'by Stripe' };
+}
+
 async function invoicesCreate(/** @type {any} */ b) {
   const st = needStripe();
   const c = await getClient(intId(b.client_id));
@@ -215,15 +232,46 @@ async function invoicesCreate(/** @type {any} */ b) {
     const unit = cents(it.unit_cents, 'Price');
     const desc = str(it.description, 300);
     if (!desc) throw new HttpError(400, 'Each line needs a description');
-    return { amount: qty * unit, description: qty > 1 ? `${desc} (${qty} × ${money(unit)})` : desc };
+    return { amount: qty * unit, qty, unit, desc, description: qty > 1 ? `${desc} (${qty} × ${money(unit)})` : desc };
   });
   if (!lines.length) throw new HttpError(400, 'Add at least one line');
   if (mode === 'email' && !c.email) throw new HttpError(400, 'This client has no email. Add one, or use "Get pay link" and send the link yourself.');
   const days = Math.max(0, Math.min(120, Math.floor(Number(b.due_days) || 7)));
+
+  // extras: discount, project / PO number, CC, bank payment, reminders
+  const subtotal = lines.reduce((s, l) => s + l.amount, 0);
+  let disc = 0, discLabel = '';
+  const dt = b.discount && b.discount.type;
+  if (dt === 'percent') {
+    const pct = Number(b.discount.value);
+    if (!(pct > 0 && pct <= 100)) throw new HttpError(400, 'Discount must be between 1% and 100%');
+    disc = Math.round(subtotal * pct / 100);
+    discLabel = `Discount (${+pct.toFixed(2)}%)`;
+  } else if (dt === 'amount') {
+    disc = cents(b.discount.value, 'Discount');
+    discLabel = 'Discount';
+  }
+  if (disc >= subtotal) throw new HttpError(400, 'The discount is as big as the invoice. Lower it.');
+  const fields = [];
+  const project = str(b.project, 140), po = str(b.po, 140);
+  if (project) fields.push({ name: 'Project', value: project });
+  if (po) fields.push({ name: 'PO number', value: po });
+  const cc = str(b.cc, 300).split(/[\s,;]+/).filter(Boolean);
+  if (cc.length > 3) throw new HttpError(400, 'Up to 3 CC emails');
+  for (const e of cc) if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new HttpError(400, `"${e.slice(0, 60)}" is not a valid email`);
+  const bank = !!b.bank && mode !== 'charge';
+  const remind = !!b.remind && mode !== 'charge';
+  const settings = await getSettings();
+
   let pm = '';
   if (mode === 'charge') pm = await pickCard(c, b.pm_id);
   const customer = await ensureCustomer(c);
 
+  /** @type {Record<string,string>} */
+  const meta = { gg_client_id: String(c.id) };
+  if (remind) meta.gg_remind = '1';
+  if (cc.length) meta.gg_cc = cc.join(',');
+  if (mode === 'charge') meta.gg_by = 'admin';
   let inv = await st.invoices.create({
     customer,
     collection_method: mode === 'charge' ? 'charge_automatically' : 'send_invoice',
@@ -231,17 +279,23 @@ async function invoicesCreate(/** @type {any} */ b) {
     auto_advance: false,
     pending_invoice_items_behavior: 'exclude',
     description: str(b.memo, 500) || undefined,
-    metadata: { gg_client_id: String(c.id) }
+    ...(fields.length ? { custom_fields: fields } : {}),
+    ...(bank ? { payment_settings: { payment_method_types: ['card', 'us_bank_account'] } } : {}),
+    metadata: meta
   });
   for (const l of lines) {
-    await st.invoiceItems.create({ customer, invoice: inv.id, amount: l.amount, currency: 'usd', description: l.description });
+    await st.invoiceItems.create({ customer, invoice: inv.id, amount: l.amount, currency: 'usd', description: l.description,
+      metadata: { gg_qty: String(l.qty), gg_unit: String(l.unit), gg_desc: l.desc.slice(0, 450) } });
   }
-  const total = lines.reduce((s, l) => s + l.amount, 0);
+  if (disc) await st.invoiceItems.create({ customer, invoice: inv.id, amount: -disc, currency: 'usd', description: discLabel });
+  const total = subtotal - disc;
+  let via = '';
   if (mode !== 'draft') inv = await st.invoices.finalizeInvoice(inv.id, { auto_advance: false });
-  if (mode === 'email') inv = await st.invoices.sendInvoice(inv.id);
+  if (mode === 'email') ({ inv, via } = await emailInvoice(inv, settings));
   if (mode === 'charge') inv = await st.invoices.pay(inv.id, { payment_method: pm, off_session: true });
-  const verb = { draft: 'Draft invoice', link: 'Invoice', email: 'Invoice emailed', charge: 'Invoice charged to card' }[mode];
-  await log(c.id, 'invoice', `${verb} ${inv.number || ''} for ${money(total)}`.replace(/\s+/g, ' '));
+  const what = { draft: `Draft invoice for ${money(total)}`, link: `Invoice ${inv.number} for ${money(total)}, pay link created`,
+    email: `Invoice ${inv.number} for ${money(total)} emailed ${via}`, charge: `Invoice ${inv.number} for ${money(total)} charged to card` }[mode];
+  await log(c.id, 'invoice', what);
   if (mode !== 'draft') await q(`update clients set status='active', updated_at=now() where id=$1 and status='lead'`, [c.id]);
   return { invoice: mapInvoice(inv, { [customer]: { id: c.id, name: c.name } }) };
 }
@@ -256,12 +310,14 @@ async function invoicesAction(/** @type {any} */ b) {
   const clientId = names[cust]?.id || null;
   switch (b.action) {
     case 'finalize': inv = await st.invoices.finalizeInvoice(id, { auto_advance: false }); break;
-    case 'send':
+    case 'send': {
       if (!inv.customer_email) throw new HttpError(400, 'This client has no email. Add one on the client page first.');
       if (inv.status === 'draft') inv = await st.invoices.finalizeInvoice(id, { auto_advance: false });
-      inv = await st.invoices.sendInvoice(id);
-      await log(clientId, 'invoice', `Invoice ${inv.number} emailed`);
+      let via = '';
+      ({ inv, via } = await emailInvoice(inv, await getSettings()));
+      await log(clientId, 'invoice', `Invoice ${inv.number} emailed ${via}`);
       break;
+    }
     case 'void':
       inv = await st.invoices.voidInvoice(id);
       await log(clientId, 'invoice', `Invoice ${inv.number} voided`);
@@ -273,6 +329,7 @@ async function invoicesAction(/** @type {any} */ b) {
     case 'mark_paid': {
       const method = str(b.method, 40) || 'Other';
       if (inv.status === 'draft') inv = await st.invoices.finalizeInvoice(id, { auto_advance: false });
+      await st.invoices.update(id, { metadata: { gg_by: 'admin' } });
       const amount = inv.amount_remaining;
       inv = await st.invoices.pay(id, { paid_out_of_band: true });
       // money that did not go through Stripe goes into the books by hand
@@ -288,6 +345,7 @@ async function invoicesAction(/** @type {any} */ b) {
       const c = await getClient(clientId);
       const pm = await pickCard(c, b.pm_id);
       if (inv.status === 'draft') inv = await st.invoices.finalizeInvoice(id, { auto_advance: false });
+      await st.invoices.update(id, { metadata: { gg_by: 'admin' } });
       inv = await st.invoices.pay(id, { payment_method: pm, off_session: true });
       await log(clientId, 'payment', `Invoice ${inv.number} charged to card ${money(inv.amount_paid)}`);
       break;
@@ -588,12 +646,84 @@ async function dashboard() {
     })() : Promise.resolve({ open: { count: 0, total: 0, overdue: 0, list: [] }, recent: [] })
   ]);
   out.month = { income: month.totals.income, expenses: month.totals.expenses, profit: month.totals.profit, stripe_fees: month.stripe.fees };
-  Object.assign(out, extra);
+  Object.assign(out, extra, await notificationsList());
   return out;
+}
+
+// ---------- notifications ----------
+async function notificationsList() {
+  const [list, n] = await Promise.all([
+    q(`select n.id, n.kind, n.title, n.body, n.client_id, n.created_at, n.read_at from notifications n order by n.created_at desc limit 30`),
+    one(`select count(*)::int as n from notifications where read_at is null`)
+  ]);
+  return { notifications: list, unread: n?.n || 0 };
+}
+async function notificationsRead() {
+  await q(`update notifications set read_at=now() where read_at is null`);
+  return { ok: true };
+}
+
+// ---------- settings, email, payment alerts ----------
+const HOOK_EVENTS = /** @type {const} */ (['invoice.paid', 'invoice.payment_failed', 'checkout.session.completed', 'charge.dispute.created']);
+const hookKey = () => 'sys:webhook:' + (testMode() ? 'test' : 'live');
+
+async function alertsStatus() {
+  if (!stripeKey()) return { connected: false, url: '' };
+  const id = await getKV(hookKey());
+  if (!id) return { connected: false, url: '' };
+  try {
+    const w = await stripe().webhookEndpoints.retrieve(id);
+    return { connected: w.status === 'enabled', url: w.url };
+  } catch (e) {
+    return { connected: false, url: '' };
+  }
+}
+
+async function settingsGet() {
+  const [settings, alerts] = await Promise.all([getSettings(), alertsStatus()]);
+  return { settings, alerts, email: { ready: emailReady(), from: fromAddress() }, stripe: !!stripeKey(), testMode: testMode() };
+}
+
+async function settingsSave(/** @type {any} */ b) {
+  await saveSettings(b.settings);
+  return settingsGet();
+}
+
+async function alertsConnect(/** @type {any} */ b, /** @type {any} */ req) {
+  const st = needStripe();
+  const base = origin(req);
+  if (!/^https:\/\//.test(base) && !/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(base)) throw new HttpError(400, 'Open the admin at https://gogetterinc.com/admin to turn this on.');
+  const url = base + '/api/stripe-webhook';
+  const old = await getKV(hookKey());
+  if (old) {
+    try {
+      const w = await st.webhookEndpoints.retrieve(old);
+      if (w.url === url) {
+        await st.webhookEndpoints.update(old, { disabled: false, enabled_events: [...HOOK_EVENTS] });
+        return settingsGet();
+      }
+      await st.webhookEndpoints.del(old);
+    } catch (e) { /* gone: make a new one */ }
+  }
+  const w = await st.webhookEndpoints.create({ url, enabled_events: [...HOOK_EVENTS], description: 'GO GETTER admin: payment alerts' });
+  await setKV(hookKey(), w.id);
+  return settingsGet();
+}
+
+async function emailTest() {
+  const s = await getSettings();
+  await sendEmail({ to: s.alert_email, ...testEmail(s), replyTo: s.biz_email });
+  return { ok: true, to: s.alert_email };
 }
 
 export const OPS = {
   'dashboard': dashboard,
+  'notifications.list': notificationsList,
+  'notifications.read': notificationsRead,
+  'settings.get': settingsGet,
+  'settings.save': settingsSave,
+  'alerts.connect': alertsConnect,
+  'email.test': emailTest,
   'clients.list': clientsList,
   'clients.get': clientsGet,
   'clients.save': clientsSave,

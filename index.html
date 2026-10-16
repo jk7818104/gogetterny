@@ -440,6 +440,10 @@
   @media (prefers-reduced-motion:reduce){.kick i{animation:none}.mk path{transition:none!important;animation:none!important;stroke-dashoffset:0!important}.trio article:hover,.story:hover,.ways > div:hover{translate:none}}
 
   footer{padding:36px 0;font-size:14px;color:var(--muted);border-top:1px solid var(--line)}
+  footer a{color:var(--muted)}
+  footer a:hover{color:var(--text)}
+  form .legal{font-size:13px;color:var(--muted);margin-top:-6px}
+  form .legal a{color:var(--muted)}
   footer .wrap{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap}
 
   @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}nav.sections a,.btn{transition:none}}
@@ -648,6 +652,7 @@
         <div><label for="f-msg">Your project</label><textarea id="f-msg" name="message" placeholder="What are you working on, and what's holding it back?" required></textarea></div>
         <button class="btn" type="submit">Send message</button>
         <p class="note" id="f-note" role="status"></p>
+        <p class="legal">By sending this form you agree to our <a href="/privacy">Privacy Policy</a>.</p>
       </form>
     </div>
   </section>
@@ -663,7 +668,7 @@
 <footer>
   <div class="wrap">
     <span>&copy; <span id="yr">2026</span> GO GETTER. From vision to action.</span>
-    <span>New York, NY</span>
+    <span><a href="/terms">Terms</a> &middot; <a href="/privacy">Privacy</a> &middot; New York, NY</span>
   </div>
 </footer>
 

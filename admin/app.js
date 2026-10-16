@@ -22,6 +22,10 @@
     out: I('<path d="M15 4h4a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1h-4M10 16l4-4-4-4M14 12H4"/>'),
     down: I('<path d="M12 4v11M7 10l5 5 5-5M4 20h16"/>'),
     ok: I('<path d="M5 12.5l4.5 4.5L19 7.5"/>'),
+    bell: I('<path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>'),
+    gear: I('<circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.4A7.6 7.6 0 0 0 7 6.4l-2.4-.9-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.4h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.9 2-3.4z"/>'),
+    mail: I('<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.8 6.8L12 13l8.2-6.2"/>'),
+    alert: I('<path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/>'),
     no: I('<path d="M6 6l12 12M18 6L6 18"/>')
   };
 
@@ -35,7 +39,7 @@
     strings.forEach((s, i) => { out += s; if (i < vals.length) out += part(vals[i]); });
     return raw(out);
   }
-  const safeUrl = (u) => (typeof u === 'string' && /^https:\/\//.test(u)) ? u : '#';
+  const safeUrl = (u) => (typeof u === 'string' && (/^https:\/\//.test(u) || /^\/api\/invoice-pdf\?id=in_[A-Za-z0-9%_]+$/.test(u))) ? u : '#';
   const $ = (sel, el = document) => el.querySelector(sel);
   const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
 
@@ -137,28 +141,41 @@
   }
 
   // ---------------------------------------------------------------- shell + router
-  const NAV = [
+  const NAV_ALL = [
     ['home', 'Home', ICON.home], ['clients', 'Clients', ICON.clients], ['invoices', 'Invoices', ICON.invoice],
-    ['payments', 'Payments', ICON.card], ['plans', 'Plans', ICON.plan], ['books', 'Books', ICON.books], ['reports', 'Reports', ICON.report]
+    ['payments', 'Payments', ICON.card, 'f_payments'], ['plans', 'Plans', ICON.plan, 'f_plans'], ['books', 'Books', ICON.books, 'f_books'], ['reports', 'Reports', ICON.report, 'f_reports']
   ];
+  // a feature is on unless it was switched off in Settings
+  const on = (f) => !(state.cfg && state.cfg.settings && state.cfg.settings[f] === false);
+  const mailOn = () => !!(state.cfg && state.cfg.email && state.cfg.email.ready);
+  const navItems = () => NAV_ALL.filter((n) => !n[3] || on(n[3]));
   function shell() {
     const mode = state.status.testMode ? html`<span class="mode">Test mode</span>` : '';
+    const nav = navItems();
+    const bell = on('f_notifications');
     $('#root').innerHTML = html`<div class="shell">
       <aside class="side">${raw(LOGO)}${mode}
-        <nav class="nav">${NAV.map(([k, l, i]) => html`<a href="#/${k}" data-nav="${k}">${raw(i)}<span>${l}</span></a>`)}</nav>
+        <nav class="nav">${nav.map(([k, l, i]) => html`<a href="#/${k}" data-nav="${k}">${raw(i)}<span>${l}</span></a>`)}</nav>
         <div class="foot">
+          ${bell ? html`<button type="button" data-act="notifs">${raw(ICON.bell)}<span>Notifications</span><b class="badge hide" data-badge></b></button>` : ''}
+          <a href="#/settings" data-nav="settings">${raw(ICON.gear)}<span>Settings</span></a>
           <button type="button" data-act="theme" data-label="1">${raw(isLight() ? ICON.moon : ICON.sun)}<span>${isLight() ? 'Night mode' : 'Day mode'}</span></button>
           <button type="button" data-act="logout">${raw(ICON.out)}<span>Sign out</span></button>
         </div>
       </aside>
       <div>
         <div class="topbar">${raw(LOGO)}<div class="r">${mode}
-          <button class="btn ghost sm" type="button" data-act="theme" aria-label="Day or night mode">${raw(isLight() ? ICON.moon : ICON.sun)}</button>
-          <button class="btn ghost sm" type="button" data-act="logout" aria-label="Sign out">${raw(ICON.out)}</button></div></div>
+          ${bell ? html`<button class="btn ghost sm ib" type="button" data-act="notifs" aria-label="Notifications">${raw(ICON.bell)}<b class="badge dot hide" data-badge></b></button>` : ''}
+          <a class="btn ghost sm" href="#/settings" aria-label="Settings">${raw(ICON.gear)}</a></div></div>
         <main class="view" id="view"></main>
       </div>
-      <nav class="tabs">${NAV.map(([k, l, i]) => html`<a href="#/${k}" data-nav="${k}">${raw(i)}<span>${l}</span></a>`)}</nav>
+      <nav class="tabs" style="grid-template-columns:repeat(${nav.length},1fr)">${nav.map(([k, l, i]) => html`<a href="#/${k}" data-nav="${k}">${raw(i)}<span>${l}</span></a>`)}</nav>
     </div>`.s;
+    setBadge(state.unread || 0);
+  }
+  function setBadge(n) {
+    state.unread = n;
+    $$('[data-badge]').forEach((b) => { b.textContent = n > 9 ? '9+' : String(n); b.classList.toggle('hide', !n); });
   }
 
   const VIEWS = {};
@@ -167,7 +184,8 @@
     const id = ++routeId;
     const h = location.hash.replace(/^#\/?/, '') || 'home';
     const [name, arg] = h.split('/');
-    const key = VIEWS[name] ? name : 'home';
+    const hiddenNav = NAV_ALL.find((n) => n[0] === name && n[3] && !on(n[3]));
+    const key = VIEWS[name] && !hiddenNav ? name : 'home';
     $$('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === key));
     const v = $('#view');
     if (!v) return;
@@ -189,7 +207,8 @@
   function invoiceRow(i, opts = {}) {
     state.inv[i.id] = i;
     const st = i.overdue ? 'overdue' : i.status;
-    const sub = [i.number || 'Draft', fmtDate(i.created), i.due_date && i.status === 'open' ? 'due ' + fmtDate(i.due_date) : '', i.plan ? 'payment plan' : ''].filter(Boolean).join(' · ');
+    const sub = [i.number || 'Draft', fmtDate(i.created), i.due_date && i.status === 'open' ? 'due ' + fmtDate(i.due_date) : '', i.plan ? 'payment plan' : '',
+      i.extras, i.bank && i.status === 'open' ? 'card or bank' : '', i.remind && i.status === 'open' && on('f_reminders') && mailOn() ? 'reminders on' : ''].filter(Boolean).join(' · ');
     const acts = [];
     if (opts.acts) {
       if (i.status === 'draft') {
@@ -200,7 +219,7 @@
       if (i.status === 'open') {
         acts.push(html`<button class="btn sm" data-act="inv" data-a="copy" data-id="${i.id}">Copy pay link</button>`);
         acts.push(html`<button class="btn ghost sm" data-act="inv" data-a="paid" data-id="${i.id}">Mark paid</button>`);
-        acts.push(html`<button class="btn ghost sm" data-act="inv" data-a="charge" data-id="${i.id}">Charge card</button>`);
+        if (on('f_cards')) acts.push(html`<button class="btn ghost sm" data-act="inv" data-a="charge" data-id="${i.id}">Charge card</button>`);
         acts.push(html`<button class="btn ghost sm" data-act="inv" data-a="send" data-id="${i.id}">Email again</button>`);
       }
       if (i.url && i.status !== 'draft') acts.push(html`<a class="btn ghost sm" href="${safeUrl(i.url)}" target="_blank" rel="noopener">Open</a>`);
@@ -251,31 +270,57 @@
   function paintBars(el) { $$('.progress i[data-w]', el).forEach((i) => { i.style.width = i.dataset.w + '%'; }); }
 
   const empty = (t) => html`<div class="empty">${t}</div>`;
+  const NICON = { paid: ICON.ok, failed: ICON.alert, dispute: ICON.alert, card: ICON.card, lead: ICON.mail };
+  function ago(ts) {
+    const s = (Date.now() - new Date(ts).getTime()) / 1000;
+    if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + ' min ago';
+    if (s < 86400) return Math.floor(s / 3600) + ' h ago'; if (s < 7 * 86400) return Math.floor(s / 86400) + ' d ago';
+    return fmtDate(ts);
+  }
+  function notifRow(n) {
+    const href = n.client_id ? '#/clients/' + Number(n.client_id) : '#/home';
+    return html`<a class="row nrow ${n.read_at ? '' : 'unread'}" href="${raw(href)}" data-close>
+      <span class="nk nk-${n.kind}">${raw(NICON[n.kind] || ICON.bell)}</span>
+      <div class="main"><b>${n.title}</b><span>${n.body || ''}</span></div>
+      <div class="amt"><small>${ago(n.created_at)}</small></div></a>`;
+  }
+  async function openNotifs() {
+    const r = await api('notifications.list');
+    const m = modal('Notifications', html`<div class="panel rows flat">${r.notifications.length ? r.notifications.map(notifRow) : empty('Nothing yet. Payments, failed payments, saved cards and website messages show up here.')}</div>`,
+      html`<button type="button" class="btn" data-close>Done</button>`);
+    if (r.unread) { try { await api('notifications.read'); } catch (e) {} setBadge(0); }
+    return m;
+  }
   const kpi = (label, val, sub, cls) => html`<div class="kpi ${cls || ''}"><small>${label}</small><b class="num">${val}</b>${sub ? html`<span>${sub}</span>` : ''}</div>`;
   const noStripe = () => state.status.setup.stripe ? '' : html`<div class="banner"><b>Stripe is not connected yet.</b> Add STRIPE_SECRET_KEY in Vercel to send invoices and charge cards. Clients and books work already.</div>`;
 
   // ---------------------------------------------------------------- views
   VIEWS.home = async () => {
     const d = await api('dashboard');
+    setBadge(d.unread || 0);
+    const fresh = (d.notifications || []).filter((n) => !n.read_at).slice(0, 6);
     const h = new Date().getHours();
     const hello = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
     const month = new Date().toLocaleDateString('en-US', { month: 'long' });
     return html`
       <div class="head"><div><h1>${hello}</h1><div class="sub">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div></div></div>
       ${noStripe()}
+      ${fresh.length && on('f_notifications') ? html`<div class="news"><div class="news-h"><b>${raw(ICON.bell)} What's new</b><button class="linkbtn" data-act="notifs-read">Mark all read</button></div>
+        <div class="panel rows">${fresh.map(notifRow)}</div></div>` : ''}
       <div class="kpis">
         ${kpi('Income in ' + month, money(d.month.income), d.month.stripe_fees ? money(d.month.stripe_fees) + ' card fees already taken off' : 'card payments and recorded income')}
         ${kpi('Expenses in ' + month, money(d.month.expenses), 'from your books')}
         ${kpi('Profit in ' + month, money(d.month.profit), '', d.month.profit >= 0 ? 'pos' : 'neg')}
         ${kpi('Waiting to be paid', money(d.open.total), `${d.open.count} open invoice${d.open.count === 1 ? '' : 's'}${d.open.overdue ? ` · ${d.open.overdue} late` : ''}`, d.open.overdue ? 'neg' : '')}
       </div>
-      <div class="quick">
-        <button type="button" data-act="new-invoice">${raw(ICON.invoice)}New invoice</button>
-        <button type="button" data-act="new-charge">${raw(ICON.card)}Charge a card</button>
-        <button type="button" data-act="new-plan">${raw(ICON.plan)}Payment plan</button>
-        <button type="button" data-act="new-entry" data-kind="expense">${raw(ICON.dollar)}Add expense</button>
-        <button type="button" data-act="new-client">${raw(ICON.user)}Add client</button>
-      </div>
+      ${(() => {
+        const q = [html`<button type="button" data-act="new-invoice">${raw(ICON.invoice)}New invoice</button>`];
+        if (on('f_cards')) q.push(html`<button type="button" data-act="new-charge">${raw(ICON.card)}Charge a card</button>`);
+        if (on('f_plans')) q.push(html`<button type="button" data-act="new-plan">${raw(ICON.plan)}Payment plan</button>`);
+        if (on('f_books')) q.push(html`<button type="button" data-act="new-entry" data-kind="expense">${raw(ICON.dollar)}Add expense</button>`);
+        q.push(html`<button type="button" data-act="new-client">${raw(ICON.user)}Add client</button>`);
+        return html`<div class="quick" style="--n:${q.length}">${q}</div>`;
+      })()}
       <div class="cols">
         <div><h2 class="sec">Waiting to be paid <a class="muted" href="#/invoices">See all</a></h2>
           <div class="panel rows">${d.open.list.length ? d.open.list.map((i) => invoiceRow(i, { link: true })) : empty('Nothing waiting. Every invoice is paid.')}</div></div>
@@ -321,21 +366,21 @@
         </div>
         <div class="acts">
           <button class="btn" data-act="new-invoice" data-client="${c.id}">${raw(ICON.invoice)}Invoice</button>
-          <button class="btn ghost" data-act="new-charge" data-client="${c.id}">${raw(ICON.card)}Charge card</button>
-          <button class="btn ghost" data-act="new-plan" data-client="${c.id}">${raw(ICON.plan)}Payment plan</button>
+          ${on('f_cards') ? html`<button class="btn ghost" data-act="new-charge" data-client="${c.id}">${raw(ICON.card)}Charge card</button>` : ''}
+          ${on('f_plans') ? html`<button class="btn ghost" data-act="new-plan" data-client="${c.id}">${raw(ICON.plan)}Payment plan</button>` : ''}
           <button class="btn ghost" data-act="edit-client" data-id="${c.id}">Edit</button>
         </div></div>
       ${noStripe()}
       <div class="cols">
         <div>
-          <h2 class="sec">Cards on file</h2>
+          ${on('f_cards') ? html`<h2 class="sec">Cards on file</h2>
           <div class="panel">${d.cards.length ? html`<div class="cards">${d.cards.map((k) => html`<div class="ccard">${raw(ICON.card)}<div><b>${k.brand} •••• ${k.last4}</b><br><small>expires ${k.exp}</small></div><button class="linkbtn" data-act="card-remove" data-client="${c.id}" data-id="${k.id}" aria-label="Remove card">Remove</button></div>`)}</div>` : empty('No card saved yet.')}
-            ${hasStripe ? html`<div class="addnote"><button class="btn ghost sm" data-act="card-link" data-client="${c.id}">Send "save card" link</button><span class="muted">They type the card on Stripe's secure page.</span></div>` : ''}</div>
+            ${hasStripe ? html`<div class="addnote"><button class="btn ghost sm" data-act="card-link" data-client="${c.id}">Send "save card" link</button><span class="muted">They type the card on Stripe's secure page.</span></div>` : ''}</div>` : ''}
           <h2 class="sec">Invoices</h2>
           <div class="panel rows">${d.invoices.length ? d.invoices.map((i) => invoiceRow(i, { acts: true })) : empty('No invoices yet.')}</div>
           <h2 class="sec">Payments</h2>
           <div class="panel rows">${d.charges.length ? d.charges.map((x) => chargeRow(x, { acts: true })) : empty('No card payments yet.')}</div>
-          ${d.plans.length ? html`<h2 class="sec">Payment plans</h2><div class="panel rows">${d.plans.map((p) => planRow(p, { acts: true }))}</div>` : ''}
+          ${d.plans.length && on('f_plans') ? html`<h2 class="sec">Payment plans</h2><div class="panel rows">${d.plans.map((p) => planRow(p, { acts: true }))}</div>` : ''}
         </div>
         <div>
           ${c.notes ? html`<h2 class="sec">Notes</h2><div class="panel pad notes">${c.notes}</div>` : ''}
@@ -344,7 +389,7 @@
             <form class="addnote" id="noteform" data-client="${c.id}"><input id="note" placeholder="Add a note, a call, a promise…" maxlength="2000"><button class="btn sm" type="submit">Add</button></form>
             <div class="rows">${d.activity.length ? d.activity.map((a) => html`<div class="row"><div class="main"><b>${a.body}</b><span>${a.kind}</span></div><div class="amt"><small>${fmtDate(a.created_at)}</small></div></div>`) : empty('Nothing yet.')}</div>
           </div>
-          ${entries.length ? html`<h2 class="sec">In your books</h2><div class="panel rows">${entries.map(entryRow)}</div>` : ''}
+          ${entries.length && on('f_books') ? html`<h2 class="sec">In your books</h2><div class="panel rows">${entries.map(entryRow)}</div>` : ''}
           <p style="margin-top:28px"><button class="btn danger sm" data-act="delete-client" data-id="${c.id}">Delete client</button></p>
         </div>
       </div>`;
@@ -482,6 +527,100 @@
       <p class="hint" style="margin-top:14px">For your accountant: card income is shown after Stripe fees. This is a simple summary, not tax advice.</p>`;
   };
 
+  VIEWS.settings = async () => {
+    const d = await api('settings.get');
+    state.cfg = d;
+    const s = d.settings, em = d.email.ready;
+    const sw = (key, title, sub, needMail) => html`<label class="setrow ${needMail && !em ? 'off' : ''}"><div><b>${title}</b>${sub ? html`<span>${sub}</span>` : ''}</div>
+      <span class="switch"><input type="checkbox" data-set="${key}" ${raw(s[key] ? 'checked' : '')} ${raw(needMail && !em ? 'disabled' : '')}><i></i></span></label>`;
+    const field = (key, title, type = 'text') => html`<label class="setrow"><div><b>${title}</b></div><input data-set="${key}" type="${type}" value="${s[key]}" maxlength="200"></label>`;
+    return html`
+      <div class="head"><div><h1>Settings</h1><div class="sub">Switch features on or off, automatic emails, alerts and how invoices look.</div></div>
+        <div class="acts"><button class="btn" data-act="settings-save">Save settings</button></div></div>
+
+      <h2 class="sec">Features <span class="muted">Off = hidden from the admin</span></h2>
+      <div class="panel">
+        ${sw('f_payments', 'Payments page', 'List of card payments, refunds')}
+        ${sw('f_cards', 'Cards on file', '"Save card" links and charging a saved card')}
+        ${sw('f_plans', 'Payment plans', 'Weekly or monthly payments')}
+        ${sw('f_books', 'Books', 'Cash, checks, Zelle and expenses')}
+        ${sw('f_reports', 'Reports', 'Profit and loss, Excel downloads')}
+        ${sw('f_discounts', 'Discounts on invoices', '% or $ off')}
+        ${sw('f_fields', 'Project and PO number on invoices', '')}
+        ${sw('f_cc', 'CC on invoice emails', '')}
+        ${sw('f_ach', 'Bank payments (ACH)', 'Turn on ACH Direct Debit in Stripe → Settings → Payment methods first')}
+        ${sw('f_reminders', 'Invoice reminders', 'Daily check; emails go out 3 days before, on the due date, and 7 days late')}
+        ${sw('f_leads', 'Website messages become leads', 'The contact form on gogetterinc.com adds the person here')}
+        ${sw('f_notifications', 'Notifications bell', '')}
+      </div>
+
+      <h2 class="sec">Payment alerts</h2>
+      <div class="panel pad">${!d.stripe ? html`<p class="muted">Connect Stripe first.</p>` : d.alerts.connected
+        ? html`<div class="status"><span class="ok">${raw(ICON.ok)}</span><div><b>On.</b> Stripe tells the admin right away when a client pays, a payment fails, a card is saved or a dispute opens.</div></div>`
+        : html`<div class="status"><div><b>Off.</b> Turn this on so payments show up by themselves, receipts go out, and you get notified.</div><button class="btn" data-act="alerts-connect">Turn on</button></div>`}</div>
+
+      <h2 class="sec">Email</h2>
+      <div class="panel pad">${em
+        ? html`<div class="status"><span class="ok">${raw(ICON.ok)}</span><div><b>Connected.</b> Emails go out from ${d.email.from}.</div><button class="btn ghost" data-act="email-test">Send me a test</button></div>`
+        : html`<b>Not connected yet.</b> Until then, Stripe sends the invoice emails. To send your own branded emails with the PDF:
+          <ol class="steps">
+            <li>Make a free account at <b>resend.com</b> (up to 3,000 emails a month free).</li>
+            <li><b>Domains → Add domain → gogetterinc.com</b>. Add the DNS records it shows where your domain's DNS is (if it's on Vercel: Vercel → Domains → gogetterinc.com). Wait until it says Verified.</li>
+            <li><b>API Keys → Create API key</b>, copy it.</li>
+            <li>Vercel → gogetterny → <b>Settings → Environment Variables</b> → add <code>RESEND_API_KEY</code> → Save → Redeploy.</li>
+          </ol>`}</div>
+
+      <h2 class="sec">Emails to clients</h2>
+      <div class="panel">
+        ${sw('invoices_from_us', 'Send invoices from GO GETTER', 'Your own design with a Pay button and the PDF attached, instead of Stripe\'s email', true)}
+        ${sw('paid_thankyou', 'Receipt after they pay', 'Thank-you email with the PAID receipt PDF. Turn off Stripe\'s own receipts so they don\'t get two.', true)}
+        ${sw('lead_autoreply', 'Auto-reply to website messages', '"We got your message, we reply within 24 hours."', true)}
+      </div>
+
+      <h2 class="sec">Alerts to you</h2>
+      <div class="panel">
+        ${field('alert_email', 'Send alerts to', 'email')}
+        ${sw('alert_paid', 'A client paid online', '', true)}
+        ${sw('alert_failed', 'A payment failed or a dispute opened', '', true)}
+        ${sw('alert_card', 'A client saved a card', '', true)}
+        ${sw('alert_lead', 'New website message', 'Off by default: the website form already emails you', true)}
+      </div>
+      <p class="hint">The bell in the admin always shows these, even without email.</p>
+
+      <h2 class="sec">New invoices start with</h2>
+      <div class="panel">
+        ${sw('ach_default', 'Bank payment (ACH) turned on', '')}
+        ${sw('remind_default', 'Reminders turned on', '', true)}
+      </div>
+
+      <h2 class="sec">On your invoices and emails</h2>
+      <div class="panel">
+        ${field('biz_name', 'Business name')}
+        ${field('biz_address', 'Address')}
+        ${field('biz_phone', 'Phone', 'tel')}
+        ${field('biz_email', 'Email (clients reply here)', 'email')}
+        ${field('invoice_thanks', 'Thank-you line')}
+        <label class="setrow col"><div><b>Terms printed on invoices</b><span>Shown at the bottom of every invoice PDF.</span></div><textarea data-set="invoice_terms" maxlength="1000">${s.invoice_terms}</textarea></label>
+      </div>
+      <p class="hint">Your full <a href="/terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a> are on the website and linked from every email.</p>
+
+      <div class="saverow"><button class="btn" data-act="settings-save">Save settings</button>
+        <button class="btn ghost" type="button" data-act="theme" data-label="1">${raw(isLight() ? ICON.moon : ICON.sun)}<span>${isLight() ? 'Night mode' : 'Day mode'}</span></button>
+        <button class="btn ghost" type="button" data-act="logout">${raw(ICON.out)}<span>Sign out</span></button></div>`;
+  };
+
+  async function saveSettings(btn) {
+    const out = {};
+    $$('#view [data-set]').forEach((el) => { out[el.dataset.set] = el.type === 'checkbox' ? el.checked : el.value; });
+    await busy(btn, async () => {
+      try {
+        state.cfg = await api('settings.save', { settings: out });
+        toast('Settings saved');
+        shell(); route();
+      } catch (err) { toast(err.message, true); }
+    });
+  }
+
   // ---------------------------------------------------------------- dialogs
   function modal(title, body, foot) {
     const d = document.createElement('dialog');
@@ -547,11 +686,29 @@
         <button type="button" class="linkbtn" data-add-line style="margin-top:8px">+ Add a line</button></div>
       <div class="grid2"><div><label for="f-due">Due</label><select id="f-due"><option value="0">On receipt</option><option value="7" selected>In 7 days</option><option value="14">In 14 days</option><option value="30">In 30 days</option></select></div>
         <div><label for="f-memo">Note on invoice (optional)</label><input id="f-memo" maxlength="500" placeholder="Thank you!"></div></div>
-      <div class="total"><span>Total</span><b class="num" id="f-total">$0.00</b></div>
+      <div class="totals">
+        ${on('f_discounts') ? html`<div class="tl"><span>Subtotal</span><span class="num" id="f-sub">$0.00</span></div>
+        <div class="tl"><span class="disc"><select id="f-dtype" aria-label="Discount"><option value="">No discount</option><option value="percent">Discount %</option><option value="amount">Discount $</option></select>
+          <input id="f-dval" inputmode="decimal" placeholder="0" aria-label="Discount amount" class="hide"></span><span class="num" id="f-disc"></span></div>` : ''}
+        <div class="total"><span>Total</span><b class="num" id="f-total">$0.00</b></div>
+      </div>
+      ${(() => {
+        const c = [];
+        const cfg = (state.cfg && state.cfg.settings) || {};
+        if (on('f_ach')) c.push(html`<label class="check" id="c-bank"><input type="checkbox" id="f-bank" ${raw(cfg.ach_default ? 'checked' : '')}><div><b>Let them pay by bank (ACH)</b><span>Fee 0.8%, max $5, instead of about 3% by card.</span></div></label>`);
+        if (on('f_reminders')) c.push(html`<label class="check ${mailOn() ? '' : 'off'}" id="c-remind"><input type="checkbox" id="f-remind" ${raw(mailOn() && cfg.remind_default !== false ? 'checked' : '')} ${raw(mailOn() ? '' : 'disabled')}><div><b>Send reminders until paid</b><span>${mailOn() ? '3 days before, on the due date, and 7 days late. The PDF is attached.' : 'Connect email in Settings first.'}</span></div></label>`);
+        return c.length ? html`<div class="checks">${c}</div>` : '';
+      })()}
+      ${on('f_fields') || on('f_cc') ? html`<details class="more"><summary>More options</summary><div class="fields">
+        ${on('f_fields') ? html`<div class="grid2"><div><label for="f-project">Project</label><input id="f-project" maxlength="140" placeholder="Shows on the invoice"></div>
+          <div><label for="f-po">PO number</label><input id="f-po" maxlength="140"></div></div>` : ''}
+        ${on('f_cc') ? html`<div><label for="f-cc">Also email to (CC)</label><input id="f-cc" placeholder="accounts@client.com" ${raw(mailOn() ? '' : 'disabled')}>
+          <div class="hint">${mailOn() ? 'Up to 3 emails, with commas. They get the invoice, reminders and receipt too.' : 'Works when email is connected in Settings.'}</div></div>` : ''}
+      </div></details>` : ''}
       <div><label>How do you want to send it?</label><div class="choices" id="f-mode">
         <label class="choice"><input type="radio" name="mode" value="link" checked><div><b>Get a pay link</b><span>Copy it and send by WhatsApp, text or email. They pay by card on Stripe.</span></div></label>
         <label class="choice" data-need="email"><input type="radio" name="mode" value="email"><div><b>Email the invoice</b><span data-email-note>Stripe emails it with a Pay button.</span></div></label>
-        <label class="choice" data-need="card"><input type="radio" name="mode" value="charge"><div><b>Charge the saved card now</b><span data-card-note>No card saved for this client.</span></div></label>
+        <label class="choice ${on('f_cards') ? '' : 'hide'}" data-need="card"><input type="radio" name="mode" value="charge"><div><b>Charge the saved card now</b><span data-card-note>No card saved for this client.</span></div></label>
         <label class="choice"><input type="radio" name="mode" value="draft"><div><b>Save as draft</b><span>Send it later.</span></div></label>
       </div><div id="f-cardpick" class="hide" style="margin-top:8px"></div></div>
     </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit" id="f-go">Create invoice</button>`);
@@ -563,22 +720,41 @@
       linesBox.appendChild(row);
     };
     const read = () => Array.from(linesBox.children).map((r) => { const [a, b, c] = r.querySelectorAll('input'); return { description: a.value.trim(), qty: Math.max(1, parseInt(b.value, 10) || 1), unit_cents: parseMoney(c.value) }; });
-    const sum = () => { const t = read().reduce((s, l) => s + (isNaN(l.unit_cents) ? 0 : l.unit_cents * l.qty), 0); $('#f-total', m.d).textContent = money(t); return t; };
+    const discount = (sub) => {
+      const t = $('#f-dtype', m.d); if (!t || !t.value) return { cents: 0, send: null };
+      const raw = $('#f-dval', m.d).value;
+      if (t.value === 'percent') { const p = parseFloat(String(raw).replace(/[%\s]/g, '')); return { cents: p > 0 && p <= 100 ? Math.round(sub * p / 100) : NaN, send: { type: 'percent', value: p } }; }
+      const c = parseMoney(raw); return { cents: c > 0 ? c : NaN, send: { type: 'amount', value: c } };
+    };
+    const sum = () => {
+      const sub = read().reduce((s, l) => s + (isNaN(l.unit_cents) ? 0 : l.unit_cents * l.qty), 0);
+      const d = discount(sub);
+      if ($('#f-sub', m.d)) { $('#f-sub', m.d).textContent = money(sub); $('#f-disc', m.d).textContent = d.cents ? (isNaN(d.cents) ? '' : '−' + money(d.cents)) : ''; }
+      const t = sub - (d.cents || 0);
+      $('#f-total', m.d).textContent = money(Math.max(0, t)); return t;
+    };
     addLine();
     linesBox.addEventListener('input', sum);
+    if ($('#f-dtype', m.d)) {
+      $('#f-dtype', m.d).addEventListener('change', (e) => { const v = $('#f-dval', m.d); v.classList.toggle('hide', !e.target.value); v.placeholder = e.target.value === 'percent' ? '10' : '0.00'; if (e.target.value) v.focus(); sum(); });
+      $('#f-dval', m.d).addEventListener('input', sum);
+    }
     $('[data-add-line]', m.d).addEventListener('click', () => { addLine(); linesBox.lastElementChild.querySelector('input').focus(); });
     let cards = [];
     const sel = $('#f-client', m.d);
     const setMode = () => {
       const mode = (m.form.querySelector('input[name=mode]:checked') || {}).value;
       $('#f-cardpick', m.d).classList.toggle('hide', mode !== 'charge' || cards.length < 2);
+      ['#c-bank', '#c-remind'].forEach((k) => { const el = $(k, m.d); if (el) el.classList.toggle('hide', mode === 'charge'); });
       $('#f-go', m.d).textContent = { link: 'Create and get link', email: 'Create and email', charge: 'Create and charge card', draft: 'Save draft' }[mode] || 'Create invoice';
     };
     const loadCards = async () => {
       cards = []; let mail = '';
       if (sel.value) { try { const r = await api('cards.list', { client_id: Number(sel.value) }); cards = r.cards; mail = r.email; } catch (e) {} }
       const ec = $('[data-need=email]', m.d), cc = $('[data-need=card]', m.d);
-      ec.classList.toggle('off', !mail); ec.querySelector('[data-email-note]').textContent = mail ? `Stripe emails it to ${mail} with a Pay button.` : 'This client has no email yet.';
+      const own = mailOn() && state.cfg.settings.invoices_from_us !== false;
+      ec.classList.toggle('off', !mail); ec.querySelector('[data-email-note]').textContent = !mail ? 'This client has no email yet.'
+        : own ? `GO GETTER emails it to ${mail}, with a Pay button and the PDF attached.` : `Stripe emails it to ${mail} with a Pay button.`;
       cc.classList.toggle('off', !cards.length); cc.querySelector('[data-card-note]').textContent = cards.length ? `${cards[0].brand} •••• ${cards[0].last4}` : 'No card saved for this client.';
       $('#f-cardpick', m.d).innerHTML = cards.length ? cardOptions(cards).s : '';
       const cur = m.form.querySelector('input[name=mode]:checked');
@@ -595,12 +771,19 @@
       if (!items.length || items.some((l) => !l.description)) return m.err('Each line needs a description');
       if (items.some((l) => isNaN(l.unit_cents) || l.unit_cents <= 0)) return m.err('Each line needs a price, like 250 or 99.50');
       const mode = m.form.querySelector('input[name=mode]:checked').value;
+      const sub = read().reduce((s, l) => s + l.unit_cents * l.qty, 0);
+      const disc = discount(sub);
+      if (isNaN(disc.cents)) return m.err('Enter the discount, like 10 for 10% or 50 for $50');
+      if (disc.cents >= sub) return m.err('The discount is as big as the invoice');
       const total = sum();
       if (mode === 'charge' && !confirm(`Charge ${money(total)} to the saved card now?`)) return;
+      const val = (k) => { const el = $(k, m.d); return el ? el.value : ''; };
+      const chk = (k) => { const el = $(k, m.d); return !!(el && el.checked && !el.disabled); };
       await busy($('#f-go', m.d), async () => {
         try {
           const pm = $('#f-card', m.d);
-          const r = await api('invoices.create', { client_id: Number(sel.value), items, due_days: Number($('#f-due', m.d).value), memo: $('#f-memo', m.d).value, mode, pm_id: pm ? pm.value : '' });
+          const r = await api('invoices.create', { client_id: Number(sel.value), items, due_days: Number($('#f-due', m.d).value), memo: $('#f-memo', m.d).value, mode, pm_id: pm ? pm.value : '',
+            discount: disc.send, bank: chk('#f-bank'), remind: chk('#f-remind'), project: val('#f-project'), po: val('#f-po'), cc: val('#f-cc') });
           m.close();
           if (mode === 'link' && r.invoice.url) shareLink('Pay link ready', r.invoice.url, r.invoice, 'invoice');
           else toast(mode === 'email' ? 'Invoice emailed' : mode === 'charge' ? 'Card charged, invoice paid' : 'Draft saved');
@@ -880,8 +1063,13 @@
       if (EXPORTS[a]) return EXPORTS[a]();
       switch (a) {
         case 'theme': return toggleTheme();
-        case 'logout': await api('logout'); state.clients = null; return gate();
+        case 'logout': await api('logout'); state.clients = null; state.cfg = null; clearInterval(state.poll); return gate();
         case 'reload': return refresh();
+        case 'notifs': return openNotifs();
+        case 'notifs-read': await api('notifications.read'); setBadge(0); return refresh();
+        case 'settings-save': return saveSettings(t);
+        case 'alerts-connect': await busy(t, async () => { state.cfg = await api('alerts.connect'); }); toast('Payment alerts are on'); return refresh();
+        case 'email-test': { const r = await busy(t, () => api('email.test')); return toast('Test sent to ' + r.to); }
         case 'print': return window.print();
         case 'new-client': {
           const back = t.dataset.return && t.closest('dialog');
@@ -969,7 +1157,13 @@
     try { state.status = await api('status'); }
     catch (e) { $('#root').innerHTML = html`<div class="gate"><div class="box">${raw(LOGO)}<h1>Can't reach the server</h1><p>${e.message}</p><button class="btn" data-act="reload-page">Try again</button></div></div>`.s; return; }
     if (!state.status.authed) return gate();
+    try { state.cfg = await api('settings.get'); } catch (e) { state.cfg = null; }
     shell();
+    clearInterval(state.poll);
+    state.poll = setInterval(async () => {
+      if (document.hidden || !on('f_notifications')) return;
+      try { const r = await api('notifications.list'); if (r.unread !== state.unread) setBadge(r.unread); } catch (e) {}
+    }, 60000);
     window.removeEventListener('hashchange', route);
     window.addEventListener('hashchange', route);
     route();

@@ -73,6 +73,31 @@ create table if not exists hits (
   ip text not null,
   at timestamptz not null default now()
 );
+create table if not exists settings (
+  key text primary key,
+  value jsonb not null,
+  updated_at timestamptz not null default now()
+);
+create table if not exists notifications (
+  id serial primary key,
+  kind text not null,
+  title text not null,
+  body text,
+  client_id int references clients(id) on delete set null,
+  created_at timestamptz not null default now(),
+  read_at timestamptz
+);
+create table if not exists events (
+  id text primary key,
+  created_at timestamptz not null default now()
+);
+create table if not exists reminders (
+  invoice_id text not null,
+  stage text not null,
+  sent_at timestamptz not null default now(),
+  primary key (invoice_id, stage)
+);
+create index if not exists notifications_unread on notifications(read_at, created_at);
 create index if not exists entries_date on entries(date);
 create index if not exists hits_at on hits(kind, ip, at);
 create index if not exists activity_client on activity(client_id, created_at);

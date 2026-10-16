@@ -5,6 +5,15 @@
     },
     "api/lead.js": {
       "maxDuration": 10
+    },
+    "api/stripe-webhook.js": {
+      "maxDuration": 30
+    },
+    "api/cron.js": {
+      "maxDuration": 60
+    },
+    "api/invoice-pdf.js": {
+      "maxDuration": 30
     }
   },
   "headers": [
@@ -82,6 +91,22 @@
       "source": "/admin",
       "destination": "/admin/",
       "permanent": false
+    }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron",
+      "schedule": "0 14 * * *"
+    }
+  ],
+  "rewrites": [
+    {
+      "source": "/terms",
+      "destination": "/terms.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/privacy.html"
     }
   ]
 }
