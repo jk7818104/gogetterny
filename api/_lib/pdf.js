@@ -8,6 +8,7 @@ import { ARCHIVO_400, ARCHIVO_600, ARCHIVO_800, HEBREW_400, HEBREW_700 } from '.
 import { one } from './db.js';
 import { stripe } from './stripe.js';
 import { getKV, setKV } from './settings.js';
+import { sameAsThanks } from './templates.js';
 
 const TZ = 'America/New_York';
 
@@ -280,7 +281,7 @@ export async function invoicePdf({ inv, lines, client }, biz) {
     for (const r of wrap(`We received your payment of ${money(inv.amount_paid || inv.total)}. Keep this receipt for your records.`, lwid)) { text(r, M, ly); ly -= 13; }
     ly -= 10;
   }
-  if (inv.description) {
+  if (inv.description && !sameAsThanks(inv.description, biz)) {
     text('Notes', M, ly, { f: semi, color: INK, size: 10.5 });
     ly -= 15;
     for (const r of wrap(inv.description, lwid).slice(0, 8)) { text(r, M, ly); ly -= 13; }

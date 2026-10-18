@@ -8,6 +8,9 @@ const TZ = 'America/New_York';
 const FONT = "Archivo,'Helvetica Neue',Helvetica,Arial,sans-serif";
 const C = { band: '#101216', ink: '#12151B', body: '#333842', mute: '#6B7280', rule: '#DADDE2', zebra: '#F6F7F9', amber: '#F2B705', green: '#177D4F', link: '#8A6400', page: '#ECEEF1' };
 
+/** Stripe's default memo repeats the thank-you line; don't print it twice @param {string} d @param {any} biz */
+export const sameAsThanks = (d, biz) => { const n = (/** @type {string} */ x) => String(x || '').toLowerCase().replace(/[^a-z]/g, ''); return n(d) === n(biz.invoice_thanks || 'Thank you for your business!') || n(d) === 'thankyouforyourbusiness'; };
+
 /** @param {any} s */
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => /** @type {any} */ ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 /** @param {number} c */
@@ -117,7 +120,7 @@ ${p(`Please find your invoice from ${b.biz_name} below. We appreciate your promp
 ${amountBox('Balance due', amount, due ? `Due ${due}` : 'Due on receipt')}
 ${button('Review and pay', inv.hosted_invoice_url)}
 <p style="margin:6px 0 0;font-size:13px;color:${C.mute}">${bankOk(inv) ? 'Pay by card or bank account' : 'Pay by card'} on our secure payment page, run by Stripe.</p>
-${inv.description ? `${h2('Note')}${p(inv.description)}` : ''}
+${inv.description && !sameAsThanks(inv.description, b) ? `${h2('Note')}${p(inv.description)}` : ''}
 ${h2('Invoice details')}${details(info)}
 ${h2('Summary')}${items(inv)}
 ${pdfLine(o.pdfUrl, !!o.attached, 'invoice')}
