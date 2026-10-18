@@ -19,7 +19,7 @@ export const DEFAULTS = {
   remind_default: true,
   // business details printed on invoices and emails
   biz_name: 'GO GETTER',
-  biz_address: 'New York, NY',
+  biz_address: 'Monroe, NY',
   biz_phone: '845-395-5431',
   biz_email: 'office@gogetterinc.com',
   invoice_terms: 'Payment is due by the due date shown. Pay online by card or bank on our secure payment page (processed by Stripe). Questions about this invoice must be sent in writing within 30 days of the invoice date. Paid work and hour packages are not refundable unless agreed in writing. Terms of service: gogetterinc.com/terms',

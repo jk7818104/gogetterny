@@ -26,7 +26,7 @@ export function firstName(name) {
   return /^[\p{L}][\p{L}'.-]{0,29}$/u.test(f) ? f : '';
 }
 
-const DEFAULT_BIZ = { biz_name: 'GO GETTER', biz_address: 'New York, NY', biz_phone: '845-395-5431', biz_email: 'office@gogetterinc.com', invoice_thanks: 'Thank you for your business!' };
+const DEFAULT_BIZ = { biz_name: 'GO GETTER', biz_address: 'Monroe, NY', biz_phone: '845-395-5431', biz_email: 'office@gogetterinc.com', invoice_thanks: 'Thank you for your business!' };
 
 /**
  * Letterhead frame shared by every email.
