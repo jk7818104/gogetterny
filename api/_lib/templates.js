@@ -208,7 +208,7 @@ export function testEmail(biz) {
   return {
     subject: 'Test email from your admin',
     ...frame({ biz, tag: 'Test', preheader: 'Email is working.',
-      body: `${h1('Email is working')}${p('This is a test from your admin. Invoices, reminders and receipts will be sent from this address and look like this.')}${amountBox('Balance due', '$0.00', 'Sample only')}${button('Review and pay', SITE + '/admin/')}`,
+      body: `${h1('Email is working')}${p('This is a test from your admin. Invoices, reminders and receipts will be sent from this address and look like this.')}${amountBox('Balance due', '$0.00', 'Sample only')}<p style="margin:6px 0 0;font-size:13px;color:${C.mute}">In a real invoice the client gets a Review and pay button here that opens their own Stripe payment page.</p>`,
       textLines: ['Email is working.'] })
   };
 }
