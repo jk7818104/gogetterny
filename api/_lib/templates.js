@@ -1,7 +1,7 @@
 // @ts-check
 // The emails GO GETTER sends: invoice, reminder, receipt, auto-reply, alerts. One look for all of them.
 
-const SITE = 'https://gogetterinc.com';
+const SITE = process.env.SITE_URL || 'https://www.gogetterinc.com';
 const LOGO = SITE + '/brand/gogetter-logo-on-light.png';
 const TZ = 'America/New_York';
 const FONT = "Archivo,'Segoe UI',Helvetica,Arial,sans-serif";

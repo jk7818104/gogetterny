@@ -18,7 +18,7 @@ export async function notify(n) {
 export async function alertOwner(settings, key, title, rows, path = '') {
   if (!settings[key] || !emailReady() || !settings.alert_email) return;
   try {
-    await sendEmail({ to: settings.alert_email, ...alertEmail(title, rows, 'https://gogetterinc.com/admin/' + path) });
+    await sendEmail({ to: settings.alert_email, ...alertEmail(title, rows, (process.env.SITE_URL || 'https://www.gogetterinc.com') + '/admin/' + path) });
   } catch (e) {
     console.error('alert email failed', /** @type {any} */ (e).message);
   }
