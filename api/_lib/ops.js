@@ -387,6 +387,17 @@ async function cardsList(/** @type {any} */ b) {
   return { cards: pms.data.map(mapCard), email: c.email || '' };
 }
 
+/** Test mode only: put Stripe's test Visa on a client, so charges can be tried without typing a card. */
+async function cardTest(/** @type {any} */ b) {
+  if (!testMode()) throw new HttpError(400, 'Only in test mode');
+  const st = needStripe();
+  const c = await getClient(intId(b.client_id));
+  const customer = await ensureCustomer(c);
+  const pm = await st.paymentMethods.attach('pm_card_visa', { customer });
+  await log(c.id, 'card', `Test card added (VISA •••• ${pm.card?.last4 || '4242'}, test mode)`);
+  return { ok: true };
+}
+
 async function cardRemove(/** @type {any} */ b) {
   const st = needStripe();
   const c = await getClient(intId(b.client_id));
@@ -734,6 +745,7 @@ export const OPS = {
   'invoices.action': invoicesAction,
   'cards.list': cardsList,
   'cards.link': cardLink,
+  'cards.test': cardTest,
   'cards.remove': cardRemove,
   'charges.create': chargesCreate,
   'charges.list': chargesList,

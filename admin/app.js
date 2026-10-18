@@ -375,7 +375,8 @@
         <div>
           ${on('f_cards') ? html`<h2 class="sec">Cards on file</h2>
           <div class="panel">${d.cards.length ? html`<div class="cards">${d.cards.map((k) => html`<div class="ccard">${raw(ICON.card)}<div><b>${k.brand} •••• ${k.last4}</b><br><small>expires ${k.exp}</small></div><button class="linkbtn" data-act="card-remove" data-client="${c.id}" data-id="${k.id}" aria-label="Remove card">Remove</button></div>`)}</div>` : empty('No card saved yet.')}
-            ${hasStripe ? html`<div class="addnote"><button class="btn ghost sm" data-act="card-link" data-client="${c.id}">Send "save card" link</button><span class="muted">They type the card on Stripe's secure page.</span></div>` : ''}</div>` : ''}
+            ${hasStripe ? html`<div class="addnote"><button class="btn ghost sm" data-act="card-link" data-client="${c.id}">Send "save card" link</button><span class="muted">They type the card on Stripe's secure page.</span>
+              ${state.status.testMode ? html`<button class="btn ghost sm" data-act="card-test" data-client="${c.id}">Add test card</button>` : ''}</div>` : ''}</div>` : ''}
           <h2 class="sec">Invoices</h2>
           <div class="panel rows">${d.invoices.length ? d.invoices.map((i) => invoiceRow(i, { acts: true })) : empty('No invoices yet.')}</div>
           <h2 class="sec">Payments</h2>
@@ -1097,6 +1098,7 @@
           const c = (state.clients || []).find((x) => String(x.id) === String(t.dataset.client)) || {};
           return shareLink('Save-card link', r.url, { name: c.name, email: c.email }, 'card');
         }
+        case 'card-test': await busy(t, () => api('cards.test', { client_id: Number(t.dataset.client) })); toast('Test card added'); return refresh();
         case 'card-remove': {
           if (!confirm('Remove this card from the client?')) return;
           await api('cards.remove', { client_id: Number(t.dataset.client), pm_id: t.dataset.id }); toast('Card removed'); return refresh();
