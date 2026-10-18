@@ -4,12 +4,43 @@ import crypto from 'node:crypto';
 import { PDFDocument, rgb, degrees, PDFName, PDFString } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { LOGO_DARK_PNG_B64 } from './logo.js';
-import { ARCHIVO_400, ARCHIVO_600, ARCHIVO_800 } from './fonts.js';
+import { ARCHIVO_400, ARCHIVO_600, ARCHIVO_800, HEBREW_400, HEBREW_700 } from './fonts.js';
 import { one } from './db.js';
 import { stripe } from './stripe.js';
 import { getKV, setKV } from './settings.js';
 
 const TZ = 'America/New_York';
+
+/** Hebrew-script letter (Yiddish too) @param {string} ch */
+const isHeb = (ch) => /[֐-׿יִ-ﭏ]/.test(ch);
+const isStrongL = (/** @type {string} */ ch) => /[\p{L}\p{N}]/u.test(ch) && !isHeb(ch);
+const MIRROR = /** @type {Record<string,string>} */ ({ '(': ')', ')': '(', '[': ']', ']': '[', '{': '}', '}': '{', '<': '>', '>': '<' });
+/**
+ * Logical text to the order it is drawn in, left to right (a small bidi: enough for names,
+ * item lines and notes mixing Yiddish with English words and numbers).
+ * @param {string} s
+ */
+export function visual(s) {
+  const chars = Array.from(s);
+  if (!chars.some(isHeb)) return s;
+  const type = chars.map((c) => (isHeb(c) ? 'R' : isStrongL(c) ? 'L' : 'N'));
+  const firstLetter = chars.find((c) => /\p{L}/u.test(c)) || '';
+  const base = isHeb(firstLetter) ? 'R' : 'L';
+  // neutrals take the direction around them when both sides agree, else the base direction
+  for (let i = 0; i < type.length; i++) {
+    if (type[i] !== 'N') continue;
+    let j = i; while (j < type.length && type[j] === 'N') j++;
+    const before = i > 0 ? type[i - 1] : base, after = j < type.length ? type[j] : base;
+    const d = before === after ? before : base;
+    for (let k = i; k < j; k++) type[k] = d;
+    i = j - 1;
+  }
+  /** @type {{d: string, c: string[]}[]} */
+  const runs = [];
+  chars.forEach((c, i) => { const d = type[i]; if (runs.length && runs[runs.length - 1].d === d) runs[runs.length - 1].c.push(c); else runs.push({ d, c: [c] }); });
+  const shown = runs.map((r) => (r.d === 'R' ? r.c.slice().reverse().map((c) => MIRROR[c] || c).join('') : r.c.join('')));
+  return (base === 'R' ? shown.reverse() : shown).join('');
+}
 
 /** @param {number} c */
 const money = (c) => (c < 0 ? '-' : '') + '$' + (Math.abs(c || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -68,12 +99,36 @@ export async function invoicePdf({ inv, lines, client }, biz) {
   const semi = await doc.embedFont(Buffer.from(ARCHIVO_600, 'base64'), { subset: true });
   const heavy = await doc.embedFont(Buffer.from(ARCHIVO_800, 'base64'), { subset: true });
   const logo = await doc.embedPng(Buffer.from(LOGO_DARK_PNG_B64, 'base64'));
+  // Yiddish / Hebrew text (client names, lines) is drawn with Noto Sans Hebrew, right to left
+  const heb = await doc.embedFont(Buffer.from(HEBREW_400, 'base64'), { subset: true });
+  const hebB = await doc.embedFont(Buffer.from(HEBREW_700, 'base64'), { subset: true });
+  const hebFor = (/** @type {any} */ f) => (f === font ? heb : hebB);
 
-  // keep only characters the font can draw
-  const chars = new Set(font.getCharacterSet());
+  // keep only characters the fonts can draw
+  const chars = new Set([...font.getCharacterSet(), ...heb.getCharacterSet().filter((c) => isHeb(String.fromCodePoint(c)))]);
   /** @param {any} s */
-  const clean = (s) => Array.from(String(s == null ? '' : s).replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/−/g, '-'))
+  const clean = (s) => Array.from(String(s == null ? '' : s).replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[−־]/g, '-'))
     .map((ch) => (chars.has(ch.codePointAt(0) || 0) ? ch : ch.charCodeAt(0) < 32 ? ' ' : '?')).join('');
+  /** Split a visual-order string into pieces that each use one font @param {string} s @param {any} f */
+  const pieces = (s, f) => {
+    /** @type {{s: string, f: any}[]} */
+    const out = [];
+    for (const ch of s) {
+      const ff = isHeb(ch) ? hebFor(f) : f;
+      if (out.length && out[out.length - 1].f === ff) out[out.length - 1].s += ch; else out.push({ s: ch, f: ff });
+    }
+    return out;
+  };
+  /** @param {string} s @param {any} f @param {number} z */
+  const measure = (s, f, z) => pieces(visual(s), f).reduce((w, p) => w + p.f.widthOfTextAtSize(p.s, z), 0);
+  /** @param {string} s @param {number} x @param {number} y @param {any} f @param {number} z @param {any} color */
+  const draw = (s, x, y, f, z, color) => {
+    for (const p of pieces(visual(s), f)) {
+      // fontkit lays Hebrew runs out right to left on its own, so hand it the run in reading order
+      const t = p.f === heb || p.f === hebB ? Array.from(p.s).reverse().join('') : p.s;
+      page.drawText(t, { x, y, size: z, font: p.f, color }); x += p.f.widthOfTextAtSize(t, z);
+    }
+  };
 
   // tokens
   const INK = rgb(0.071, 0.082, 0.106), BAND = rgb(0.063, 0.071, 0.086), BODY = rgb(0.2, 0.22, 0.26);
@@ -83,9 +138,9 @@ export async function invoicePdf({ inv, lines, client }, biz) {
 
   let page = doc.addPage([W, H]);
   /** @param {any} t @param {number} x @param {number} y @param {{size?: number, f?: any, color?: any}} [o] */
-  const text = (t, x, y, o = {}) => page.drawText(clean(t), { x, y, size: o.size || 9.5, font: o.f || font, color: o.color || BODY });
+  const text = (t, x, y, o = {}) => draw(clean(t), x, y, o.f || font, o.size || 9.5, o.color || BODY);
   /** @param {any} t @param {number} xr @param {number} y @param {{size?: number, f?: any, color?: any}} [o] */
-  const textR = (t, xr, y, o = {}) => { const s = clean(t), f = o.f || font, z = o.size || 9.5; page.drawText(s, { x: xr - f.widthOfTextAtSize(s, z), y, size: z, font: f, color: o.color || BODY }); };
+  const textR = (t, xr, y, o = {}) => { const s = clean(t), f = o.f || font, z = o.size || 9.5; draw(s, xr - measure(s, f, z), y, f, z, o.color || BODY); };
   /** @param {any} t @param {number} width @param {any} [f] @param {number} [size] */
   const wrap = (t, width, f = font, size = 9.5) => {
     const out = [];
@@ -93,12 +148,12 @@ export async function invoicePdf({ inv, lines, client }, biz) {
       let line = '';
       for (const word of para.split(/\s+/)) {
         const tryL = line ? line + ' ' + word : word;
-        if (f.widthOfTextAtSize(tryL, size) <= width) { line = tryL; continue; }
+        if (measure(tryL, f, size) <= width) { line = tryL; continue; }
         if (line) out.push(line);
         line = word;
-        while (f.widthOfTextAtSize(line, size) > width && line.length > 1) {
+        while (measure(line, f, size) > width && line.length > 1) {
           let cut = line.length - 1;
-          while (cut > 1 && f.widthOfTextAtSize(line.slice(0, cut), size) > width) cut--;
+          while (cut > 1 && measure(line.slice(0, cut), f, size) > width) cut--;
           out.push(line.slice(0, cut)); line = line.slice(cut);
         }
       }
