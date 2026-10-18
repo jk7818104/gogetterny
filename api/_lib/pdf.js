@@ -1,16 +1,15 @@
 // @ts-check
 // GO GETTER invoice / receipt as a PDF, in the company's own style.
 import crypto from 'node:crypto';
-import { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFString } from 'pdf-lib';
-import { LOGO_PNG_B64 } from './logo.js';
+import { PDFDocument, rgb, degrees, PDFName, PDFString } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
+import { LOGO_DARK_PNG_B64 } from './logo.js';
+import { ARCHIVO_400, ARCHIVO_600, ARCHIVO_800 } from './fonts.js';
 import { one } from './db.js';
 import { stripe } from './stripe.js';
 import { getKV, setKV } from './settings.js';
 
 const TZ = 'America/New_York';
-const INK = rgb(0.07, 0.08, 0.11), SOFT = rgb(0.23, 0.25, 0.30), MUTED = rgb(0.40, 0.42, 0.48);
-const LINE = rgb(0.87, 0.88, 0.90), TINT = rgb(0.965, 0.97, 0.975), AMBER = rgb(0.949, 0.718, 0.02), AMBER_TINT = rgb(1, 0.97, 0.88);
-const GREEN = rgb(0.05, 0.54, 0.34), GRAY = rgb(0.55, 0.57, 0.62);
 
 /** @param {number} c */
 const money = (c) => (c < 0 ? '-' : '') + '$' + (Math.abs(c || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -50,38 +49,45 @@ export async function loadInvoice(invoiceId) {
 }
 
 /**
+ * The invoice / receipt, laid out like a printed letterhead invoice:
+ * dark letterhead band with the logo, clear title and numbers, a solid table header,
+ * one amber bar for the balance, and a quiet footer band.
  * @param {{inv: any, lines: any[], client: any}} data
  * @param {any} biz settings (biz_name, biz_address, biz_phone, biz_email, invoice_terms, invoice_thanks)
  * @returns {Promise<Uint8Array>}
  */
 export async function invoicePdf({ inv, lines, client }, biz) {
   const doc = await PDFDocument.create();
-  const title = inv.status === 'paid' ? 'Receipt' : 'Invoice';
+  doc.registerFontkit(fontkit);
+  const paid = inv.status === 'paid';
+  const title = paid ? 'Receipt' : 'Invoice';
   doc.setTitle(`${title} ${inv.number || 'draft'} from ${biz.biz_name}`);
   doc.setAuthor(biz.biz_name);
   doc.setCreator(biz.biz_name);
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const logo = await doc.embedPng(Buffer.from(LOGO_PNG_B64, 'base64'));
+  const font = await doc.embedFont(Buffer.from(ARCHIVO_400, 'base64'), { subset: true });
+  const semi = await doc.embedFont(Buffer.from(ARCHIVO_600, 'base64'), { subset: true });
+  const heavy = await doc.embedFont(Buffer.from(ARCHIVO_800, 'base64'), { subset: true });
+  const logo = await doc.embedPng(Buffer.from(LOGO_DARK_PNG_B64, 'base64'));
 
-  // only characters the built-in font can print
-  /** @type {Map<string, boolean>} */
-  const okChar = new Map();
+  // keep only characters the font can draw
+  const chars = new Set(font.getCharacterSet());
   /** @param {any} s */
   const clean = (s) => Array.from(String(s == null ? '' : s).replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/−/g, '-'))
-    .map((ch) => {
-      if (!okChar.has(ch)) { try { font.encodeText(ch); okChar.set(ch, true); } catch { okChar.set(ch, false); } }
-      return okChar.get(ch) ? ch : (ch.charCodeAt(0) < 32 ? ' ' : '?');
-    }).join('');
+    .map((ch) => (chars.has(ch.codePointAt(0) || 0) ? ch : ch.charCodeAt(0) < 32 ? ' ' : '?')).join('');
 
-  const W = 612, H = 792, M = 48;
+  // tokens
+  const INK = rgb(0.071, 0.082, 0.106), BAND = rgb(0.063, 0.071, 0.086), BODY = rgb(0.2, 0.22, 0.26);
+  const MUTE = rgb(0.42, 0.45, 0.5), RULE = rgb(0.85, 0.86, 0.88), ZEBRA = rgb(0.965, 0.969, 0.976);
+  const AMBER = rgb(0.949, 0.718, 0.02), GREEN = rgb(0.09, 0.49, 0.31), WHITE = rgb(1, 1, 1), BAND_TEXT = rgb(0.78, 0.8, 0.84);
+  const W = 612, H = 792, M = 46, R = W - M;
+
   let page = doc.addPage([W, H]);
-  /** @param {string} t @param {number} x @param {number} y @param {{size?: number, f?: any, color?: any}} [o] */
-  const text = (t, x, y, o = {}) => page.drawText(clean(t), { x, y, size: o.size || 10, font: o.f || font, color: o.color || INK });
-  /** @param {string} t @param {number} xr right edge @param {number} y @param {{size?: number, f?: any, color?: any}} [o] */
-  const textR = (t, xr, y, o = {}) => { const s = clean(t), f = o.f || font, z = o.size || 10; page.drawText(s, { x: xr - f.widthOfTextAtSize(s, z), y, size: z, font: f, color: o.color || INK }); };
-  /** @param {string} t @param {number} width @param {any} f @param {number} size */
-  const wrap = (t, width, f = font, size = 10) => {
+  /** @param {any} t @param {number} x @param {number} y @param {{size?: number, f?: any, color?: any}} [o] */
+  const text = (t, x, y, o = {}) => page.drawText(clean(t), { x, y, size: o.size || 9.5, font: o.f || font, color: o.color || BODY });
+  /** @param {any} t @param {number} xr @param {number} y @param {{size?: number, f?: any, color?: any}} [o] */
+  const textR = (t, xr, y, o = {}) => { const s = clean(t), f = o.f || font, z = o.size || 9.5; page.drawText(s, { x: xr - f.widthOfTextAtSize(s, z), y, size: z, font: f, color: o.color || BODY }); };
+  /** @param {any} t @param {number} width @param {any} [f] @param {number} [size] */
+  const wrap = (t, width, f = font, size = 9.5) => {
     const out = [];
     for (const para of clean(t).split(/\n/)) {
       let line = '';
@@ -90,7 +96,7 @@ export async function invoicePdf({ inv, lines, client }, biz) {
         if (f.widthOfTextAtSize(tryL, size) <= width) { line = tryL; continue; }
         if (line) out.push(line);
         line = word;
-        while (f.widthOfTextAtSize(line, size) > width && line.length > 1) {   // a very long word
+        while (f.widthOfTextAtSize(line, size) > width && line.length > 1) {
           let cut = line.length - 1;
           while (cut > 1 && f.widthOfTextAtSize(line.slice(0, cut), size) > width) cut--;
           out.push(line.slice(0, cut)); line = line.slice(cut);
@@ -104,143 +110,152 @@ export async function invoicePdf({ inv, lines, client }, biz) {
   const link = (x, y, w, h, url) => {
     if (!/^https:\/\//.test(url)) return;
     const ctx = doc.context;
-    const annot = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Link', Rect: [x, y, x + w, y + h], Border: [0, 0, 0],
-      A: { Type: 'Action', S: 'URI', URI: PDFString.of(url) } }));
+    const annot = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Link', Rect: [x, y, x + w, y + h], Border: [0, 0, 0], A: { Type: 'Action', S: 'URI', URI: PDFString.of(url) } }));
     const existing = page.node.lookup(PDFName.of('Annots'));
     if (existing) /** @type {any} */ (existing).push(annot); else page.node.set(PDFName.of('Annots'), ctx.obj([annot]));
   };
+  const date = (/** @type {number} */ sec) => fmt(sec * 1000);
 
-  // ---------- header ----------
-  const lw = 168, lh = lw * logo.height / logo.width;
-  page.drawImage(logo, { x: M, y: H - M - lh, width: lw, height: lh });
-  textR(title.toUpperCase(), W - M, H - M - 22, { size: 24, f: bold });
-  let ry = H - M - 44;
+  // ---------- letterhead band ----------
+  const bandH = 104;
+  page.drawRectangle({ x: 0, y: H - bandH, width: W, height: bandH, color: BAND });
+  page.drawRectangle({ x: 0, y: H - bandH - 4, width: W, height: 4, color: AMBER });
+  const lw = 176, lh = lw * logo.height / logo.width;
+  page.drawImage(logo, { x: M, y: H - bandH / 2 - lh / 2, width: lw, height: lh });
+  const contact = [biz.biz_address, biz.biz_phone, biz.biz_email, 'gogetterinc.com'].filter(Boolean);
+  let cy = H - bandH / 2 + (contact.length * 12.5) / 2 - 9;
+  textR(biz.biz_name, R, cy + 14, { f: semi, size: 10.5, color: WHITE });
+  for (const l of contact) { textR(l, R, cy, { size: 9, color: BAND_TEXT }); cy -= 12.5; }
+
+  // ---------- title and invoice numbers ----------
+  let y = H - bandH - 50;
+  text(title, M, y, { f: heavy, size: 34, color: INK });
   /** @type {[string, string][]} */
-  const meta = [[`${title} no.`, inv.number || 'Draft'], ['Date', fmt((inv.status_transitions?.finalized_at || inv.created) * 1000)]];
-  if (inv.due_date && inv.status !== 'paid') meta.push(['Due date', fmt(inv.due_date * 1000)]);
-  if (inv.status === 'paid' && inv.status_transitions?.paid_at) meta.push(['Paid on', fmt(inv.status_transitions.paid_at * 1000)]);
-  for (const [l, v] of meta) { textR(v, W - M, ry, { f: bold }); textR(l, W - M - 92, ry, { color: MUTED }); ry -= 15; }
-
-  // from
-  let y = H - M - lh - 22;
-  text(biz.biz_name, M, y, { f: bold, size: 11 }); y -= 14;
-  for (const l of [biz.biz_address, biz.biz_phone, biz.biz_email, 'gogetterinc.com'].filter(Boolean)) { text(l, M, y, { color: SOFT, size: 9.5 }); y -= 13; }
-  y = Math.min(y, ry) - 14;
-  page.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 1, color: LINE });
-  y -= 22;
-
-  // bill to + balance box
-  const top = y;
-  text('BILL TO', M, y, { size: 8.5, f: bold, color: MUTED }); y -= 15;
-  const billName = client?.name || inv.customer_name || inv.customer_email || 'Customer';
-  text(billName, M, y, { f: bold, size: 11 }); y -= 14;
-  for (const l of [client?.company, ...(client?.address ? wrap(client.address, 230, font, 9.5) : []), client?.email || inv.customer_email, client?.phone].filter(Boolean)) { text(l, M, y, { color: SOFT, size: 9.5 }); y -= 13; }
-  const due = inv.status === 'paid' ? 0 : inv.amount_remaining;
-  const bx = W - M - 168, bw = 168, bh = 58, by = top - bh + 10;
-  page.drawRectangle({ x: bx, y: by, width: bw, height: bh, color: inv.status === 'paid' ? rgb(0.9, 0.97, 0.93) : AMBER_TINT, borderColor: inv.status === 'paid' ? GREEN : AMBER, borderWidth: 1 });
-  text(inv.status === 'paid' ? 'PAID IN FULL' : 'BALANCE DUE', bx + 14, by + bh - 20, { size: 8.5, f: bold, color: inv.status === 'paid' ? GREEN : SOFT });
-  text(money(inv.status === 'paid' ? inv.amount_paid || inv.total : due), bx + 14, by + 12, { size: 20, f: bold });
-  y = Math.min(y, by) - 8;
-  // project / PO number, side by side under the client
-  const fields = inv.custom_fields || [];
-  if (fields.length) {
-    y -= 8;
-    let h = 0;
-    fields.slice(0, 4).forEach((/** @type {any} */ f, i) => {
-      const fx = M + (i % 3) * 180;
-      if (i && i % 3 === 0) { y -= h + 8; h = 0; }
-      text(String(f.name).toUpperCase(), fx, y, { size: 8.5, f: bold, color: MUTED });
-      const rows = wrap(f.value, 168, font, 10).slice(0, 3);
-      rows.forEach((r, k) => text(r, fx, y - 14 - k * 12));
-      h = Math.max(h, 14 + rows.length * 12);
-    });
-    y -= h + 4;
+  const meta = [[`${title} number`, inv.number || 'Draft'], ['Date', date(inv.status_transitions?.finalized_at || inv.created)]];
+  if (paid && inv.status_transitions?.paid_at) meta.push(['Paid on', date(inv.status_transitions.paid_at)]);
+  else if (inv.due_date) meta.push(['Due date', date(inv.due_date)]);
+  const mx = R - 200;
+  let my = y + 22;
+  for (const [l, v] of meta) {
+    text(l, mx, my, { color: MUTE });
+    textR(v, R, my, { f: semi, color: INK });
+    my -= 17;
   }
-  y -= 14;
+  page.drawLine({ start: { x: mx, y: my + 9 }, end: { x: R, y: my + 9 }, thickness: 0.75, color: RULE });
+  my -= 8;
+  text(paid ? 'Amount paid' : 'Balance due', mx, my, { f: semi, color: INK, size: 10.5 });
+  textR(money(paid ? (inv.amount_paid || inv.total) : inv.amount_remaining), R, my, { f: heavy, color: INK, size: 13 });
 
-  // ---------- items table ----------
-  const cx = { desc: M + 10, qty: W - M - 190, rate: W - M - 90, amt: W - M - 10 };
+  // ---------- bill to, project ----------
+  y = Math.min(y - 40, my - 30);
+  const top = y;
+  text('Bill to', M, y, { f: semi, color: MUTE, size: 9 });
+  y -= 16;
+  text(client?.name || inv.customer_name || inv.customer_email || 'Customer', M, y, { f: semi, size: 11.5, color: INK });
+  y -= 14;
+  for (const l of [client?.company, ...(client?.address ? wrap(client.address, 200) : []), client?.email || inv.customer_email, client?.phone].filter(Boolean)) {
+    text(l, M, y); y -= 13;
+  }
+  let fy = top;
+  for (const f of (inv.custom_fields || []).slice(0, 4)) {
+    text(f.name, M + 250, fy, { f: semi, color: MUTE, size: 9 });
+    const rows = wrap(f.value, R - (M + 250) - 10).slice(0, 2);
+    rows.forEach((r, k) => text(r, M + 250, fy - 16 - k * 13, { color: INK }));
+    fy -= 22 + rows.length * 13;
+  }
+  y = Math.min(y, fy) - 22;
+
+  // ---------- items ----------
+  const col = { desc: M + 12, qty: R - 200, rate: R - 100, amt: R - 12 };
   const header = () => {
-    page.drawRectangle({ x: M, y: y - 8, width: W - 2 * M, height: 24, color: TINT });
-    text('DESCRIPTION', cx.desc, y, { size: 8.5, f: bold, color: MUTED });
-    textR('QTY', cx.qty, y, { size: 8.5, f: bold, color: MUTED });
-    textR('RATE', cx.rate, y, { size: 8.5, f: bold, color: MUTED });
-    textR('AMOUNT', cx.amt, y, { size: 8.5, f: bold, color: MUTED });
-    y -= 28;
+    page.drawRectangle({ x: M, y: y - 9, width: R - M, height: 26, color: INK });
+    text('Description', col.desc, y, { f: semi, color: WHITE, size: 9 });
+    textR('Qty', col.qty, y, { f: semi, color: WHITE, size: 9 });
+    textR('Rate', col.rate, y, { f: semi, color: WHITE, size: 9 });
+    textR('Amount', col.amt, y, { f: semi, color: WHITE, size: 9 });
+    y -= 30;
   };
   header();
-  let subtotal = 0, discounts = 0;
+  let subtotal = 0, discounts = 0, row = 0;
   for (const l of lines) {
     if (l.amount < 0) { discounts += l.amount; continue; }
     subtotal += l.amount;
     const qty = Number(l.metadata?.gg_qty) || l.quantity || 1;
     const unit = Number(l.metadata?.gg_unit) || Math.round(l.amount / qty);
-    const desc = l.metadata?.gg_desc || l.description || 'Item';
-    const rows = wrap(desc, cx.qty - cx.desc - 60, font, 10);
-    if (y - rows.length * 13 < M + 150) { page = doc.addPage([W, H]); y = H - M - 10; header(); }
-    rows.forEach((r, i) => text(r, cx.desc, y - i * 13));
-    textR(String(qty), cx.qty, y); textR(money(unit), cx.rate, y); textR(money(l.amount), cx.amt, y);
-    y -= rows.length * 13 + 9;
-    page.drawLine({ start: { x: M, y: y + 3 }, end: { x: W - M, y: y + 3 }, thickness: 0.6, color: LINE });
-    y -= 8;
+    const rows = wrap(l.metadata?.gg_desc || l.description || 'Item', col.qty - col.desc - 50, font, 9.5);
+    const h = rows.length * 13 + 12;
+    if (y - h < M + 170) { page = doc.addPage([W, H]); y = H - M - 20; header(); row = 0; }
+    if (row % 2 === 1) page.drawRectangle({ x: M, y: y - h + 13, width: R - M, height: h, color: ZEBRA });
+    rows.forEach((r, i) => text(r, col.desc, y - i * 13, { color: INK }));
+    textR(String(qty), col.qty, y); textR(money(unit), col.rate, y); textR(money(l.amount), col.amt, y, { color: INK });
+    y -= h;
+    row++;
   }
+  page.drawLine({ start: { x: M, y: y + 10 }, end: { x: R, y: y + 10 }, thickness: 0.75, color: RULE });
 
-  // ---------- totals ----------
-  y -= 6;
-  const stampAt = { page, y: y - 30 };
-  /** @param {string} l @param {number} v @param {boolean} [strong] */
-  const tot = (l, v, strong) => { textR(l, W - M - 110, y, { color: strong ? INK : SOFT, f: strong ? bold : font, size: strong ? 11 : 10 }); textR(money(v), W - M - 10, y, { f: strong ? bold : font, size: strong ? 11 : 10 }); y -= strong ? 20 : 16; };
+  // ---------- totals (right) and payment notes (left) ----------
+  y -= 12;
+  const tx = R - 230;
+  let ty = y;
+  /** @param {string} l @param {number} v */
+  const tot = (l, v) => { text(l, tx + 12, ty, { color: MUTE }); textR(money(v), col.amt, ty, { color: INK }); ty -= 17; };
   if (discounts) { tot('Subtotal', subtotal); tot('Discount', discounts); }
-  tot('Total', inv.total, !inv.amount_paid);
-  if (inv.amount_paid) {
-    tot('Paid', -inv.amount_paid);
-    page.drawLine({ start: { x: W - M - 200, y: y + 8 }, end: { x: W - M, y: y + 8 }, thickness: 1, color: INK });
-    y -= 4;
-    tot('Balance due', inv.amount_remaining, true);
-  }
+  tot('Total', inv.total);
+  if (inv.amount_paid && !paid) tot('Paid', -inv.amount_paid);
+  ty -= 12;
+  page.drawRectangle({ x: tx, y: ty - 11, width: R - tx, height: 30, color: paid ? GREEN : AMBER });
+  text(paid ? 'Paid in full' : 'Balance due', tx + 12, ty, { f: semi, size: 11, color: paid ? WHITE : INK });
+  textR(money(paid ? (inv.amount_paid || inv.total) : inv.amount_remaining), col.amt, ty - 1, { f: heavy, size: 14, color: paid ? WHITE : INK });
+  ty -= 30;
 
-  // ---------- notes, pay online, terms ----------
-  y -= 8;
-  if (inv.description) {
-    text('NOTES', M, y, { size: 8.5, f: bold, color: MUTED }); y -= 14;
-    for (const r of wrap(inv.description, W - 2 * M, font, 10)) { text(r, M, y, { color: SOFT }); y -= 13; }
-    y -= 10;
-  }
+  let ly = y;
+  const lwid = tx - M - 30;
   if (inv.status === 'open' && inv.hosted_invoice_url) {
-    if (y < M + 120) { page = doc.addPage([W, H]); y = H - M - 10; }
-    const boxH = 50;
-    page.drawRectangle({ x: M, y: y - boxH + 12, width: W - 2 * M, height: boxH, color: AMBER_TINT, borderColor: AMBER, borderWidth: 1 });
-    text('Pay online', M + 14, y - 6, { f: bold, size: 11 });
+    text('Pay online', M, ly, { f: semi, color: INK, size: 10.5 });
+    ly -= 15;
     const bank = (inv.payment_settings?.payment_method_types || []).includes('us_bank_account');
-    text(`Click here to pay by card${bank ? ' or bank' : ''} on our secure payment page.`, M + 14, y - 22, { color: SOFT, size: 9.5 });
-    const btnW = 120;
-    page.drawRectangle({ x: W - M - btnW - 14, y: y - 28, width: btnW, height: 28, color: AMBER });
-    const label = 'Pay ' + money(inv.amount_remaining);
-    page.drawText(clean(label), { x: W - M - 14 - btnW / 2 - bold.widthOfTextAtSize(label, 10.5) / 2, y: y - 18, size: 10.5, font: bold, color: INK });
-    link(M, y - boxH + 12, W - 2 * M, boxH, inv.hosted_invoice_url);
-    y -= boxH + 16;
+    for (const r of wrap(`Pay by card${bank ? ' or bank account' : ''} on our secure payment page, run by Stripe.`, lwid)) { text(r, M, ly); ly -= 13; }
+    const label = 'Open the payment page', lwText = semi.widthOfTextAtSize(label, 9.5);
+    text(label, M, ly, { f: semi, color: rgb(0.54, 0.39, 0) });
+    page.drawLine({ start: { x: M, y: ly - 2 }, end: { x: M + lwText, y: ly - 2 }, thickness: 0.6, color: rgb(0.54, 0.39, 0) });
+    link(M, ly - 4, lwText, 14, inv.hosted_invoice_url);
+    ly -= 24;
   }
+  if (paid) {
+    for (const r of wrap(`We received your payment of ${money(inv.amount_paid || inv.total)}. Keep this receipt for your records.`, lwid)) { text(r, M, ly); ly -= 13; }
+    ly -= 10;
+  }
+  if (inv.description) {
+    text('Notes', M, ly, { f: semi, color: INK, size: 10.5 });
+    ly -= 15;
+    for (const r of wrap(inv.description, lwid).slice(0, 8)) { text(r, M, ly); ly -= 13; }
+    ly -= 10;
+  }
+  y = Math.min(ly, ty) - 10;
+
+  // ---------- terms ----------
   if (biz.invoice_terms) {
-    text('TERMS', M, y, { size: 8.5, f: bold, color: MUTED }); y -= 13;
-    for (const r of wrap(biz.invoice_terms, W - 2 * M, font, 8.5)) { if (y < M + 30) break; text(r, M, y, { color: MUTED, size: 8.5 }); y -= 11; }
+    if (y < M + 90) { page = doc.addPage([W, H]); y = H - M - 20; }
+    page.drawLine({ start: { x: M, y: y + 6 }, end: { x: R, y: y + 6 }, thickness: 0.75, color: RULE });
+    y -= 12;
+    text('Terms', M, y, { f: semi, color: MUTE, size: 8.5 });
+    y -= 12;
+    for (const r of wrap(biz.invoice_terms, R - M, font, 8.5)) { if (y < M + 34) break; text(r, M, y, { color: MUTE, size: 8.5 }); y -= 11; }
   }
 
-  // stamp and footer on every page
+  // ---------- on every page: thank-you line, footer band, watermark ----------
   const pages = doc.getPages();
   pages.forEach((p, i) => {
     page = p;
-    if (biz.invoice_thanks && i === pages.length - 1) {
-      const t = clean(biz.invoice_thanks);
-      p.drawText(t, { x: W / 2 - bold.widthOfTextAtSize(t, 11) / 2, y: M + 14, size: 11, font: bold, color: INK });
-    }
-    const foot = clean(`${biz.biz_name} · gogetterinc.com · ${biz.biz_email}${pages.length > 1 ? ` · Page ${i + 1} of ${pages.length}` : ''}`);
-    p.drawText(foot, { x: W / 2 - font.widthOfTextAtSize(foot, 8) / 2, y: M - 12, size: 8, font, color: GRAY });
-    const stamp = inv.status === 'paid' ? ['PAID', GREEN] : inv.status === 'void' ? ['VOID', GRAY] : inv.status === 'draft' ? ['DRAFT', GRAY] : null;
-    if (stamp && p === stampAt.page) {
-      const [word, color] = /** @type {[string, any]} */ (stamp);
-      const sz = 40, tw = bold.widthOfTextAtSize(word, sz), sx = M + 40, sy = Math.max(M + 40, stampAt.y - 20);
-      p.drawRectangle({ x: sx, y: sy, width: tw + 26, height: sz + 8, borderColor: color, borderWidth: 3, rotate: degrees(12), opacity: 0, borderOpacity: 0.4 });
-      p.drawText(word, { x: sx + 13 - 2, y: sy + 10, size: sz, font: bold, color, opacity: 0.4, rotate: degrees(12) });
+    if (i === pages.length - 1 && biz.invoice_thanks) text(biz.invoice_thanks, M, M + 6, { f: semi, size: 11, color: INK });
+    p.drawRectangle({ x: 0, y: 0, width: W, height: 26, color: BAND });
+    const foot = [biz.biz_name, 'gogetterinc.com', biz.biz_email, biz.biz_phone].filter(Boolean).map(clean).join('      ');
+    p.drawText(foot, { x: M, y: 9.5, size: 8, font, color: BAND_TEXT });
+    if (pages.length > 1) { const pg = `Page ${i + 1} of ${pages.length}`; p.drawText(pg, { x: R - font.widthOfTextAtSize(pg, 8), y: 9.5, size: 8, font, color: BAND_TEXT }); }
+    const mark = inv.status === 'void' ? 'VOID' : inv.status === 'draft' ? 'DRAFT' : '';
+    if (mark) {
+      const sz = 110, tw = heavy.widthOfTextAtSize(mark, sz);
+      p.drawText(mark, { x: W / 2 - tw * 0.38, y: H / 2 - 160, size: sz, font: heavy, color: rgb(0.6, 0.62, 0.66), opacity: 0.12, rotate: degrees(32) });
     }
   });
   return doc.save();
