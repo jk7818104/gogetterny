@@ -36,7 +36,7 @@ export async function pdfTokenOk(invoiceId, token) {
 }
 /** @param {string} invoiceId */
 export async function pdfUrl(invoiceId) {
-  const base = process.env.SITE_URL || 'https://www.gogetterinc.com';
+  const base = process.env.SITE_URL || 'https://gogetterinc.com';
   return `${base}/api/invoice-pdf?id=${encodeURIComponent(invoiceId)}&t=${await pdfToken(invoiceId)}`;
 }
 
