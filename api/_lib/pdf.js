@@ -316,7 +316,7 @@ export async function invoicePdf({ inv, lines, client }, biz) {
   return doc.save();
 }
 
-/** File name like Invoice-GG-0003.pdf @param {any} inv */
+/** File name like "GO GETTER Invoice GG-0003.pdf" @param {any} inv */
 export function pdfName(inv) {
-  return `${inv.status === 'paid' ? 'Receipt' : 'Invoice'}-${String(inv.number || 'draft').replace(/[^A-Za-z0-9-]/g, '')}.pdf`;
+  return `GO GETTER ${inv.status === 'paid' ? 'Receipt' : 'Invoice'} ${String(inv.number || 'draft').replace(/[^A-Za-z0-9-]/g, '')}.pdf`;
 }
