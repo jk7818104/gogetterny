@@ -234,7 +234,7 @@
     if (!can('invoices', 'edit')) opts = { ...opts, acts: false };
     state.inv[i.id] = i;
     const st = i.overdue ? 'overdue' : i.status;
-    const sub = [i.number || 'Draft', fmtDate(i.created), i.due_date && i.status === 'open' ? 'due ' + fmtDate(i.due_date) : '', i.plan ? 'payment plan' : '',
+    const sub = [i.number || 'Draft', i.project_name, fmtDate(i.created), i.due_date && i.status === 'open' ? 'due ' + fmtDate(i.due_date) : '', i.plan ? 'payment plan' : '',
       i.extras, i.bank && i.status === 'open' ? 'card or bank' : '', i.remind && i.status === 'open' && on('f_reminders') && mailOn() ? 'reminders on' : ''].filter(Boolean).join(' · ');
     const acts = [];
     if (opts.acts) {
@@ -725,9 +725,9 @@
     return html`<select id="${name}">${cards.map((k) => html`<option value="${k.id}">${k.brand} •••• ${k.last4} (exp ${k.exp})</option>`)}</select>`;
   }
 
-  async function invoiceForm(clientId) {
+  async function invoiceForm(clientId, projectId) {
     const m = modal('New invoice', html`<div class="fields">
-      ${await clientField(clientId)}
+      ${await clientField(clientId)}${projPick()}
       <div><label>What is it for?</label><div class="lines" id="lines"></div>
         <button type="button" class="linkbtn" data-add-line style="margin-top:8px">+ Add a line</button></div>
       <div class="grid2"><div><label for="f-due">Due</label><select id="f-due"><option value="0">On receipt</option><option value="7" selected>In 7 days</option><option value="14">In 14 days</option><option value="30">In 30 days</option></select></div>
@@ -788,6 +788,7 @@
     $('[data-add-line]', m.d).addEventListener('click', () => { addLine(); linesBox.lastElementChild.querySelector('input').focus(); });
     let cards = [];
     const sel = $('#f-client', m.d);
+    wireProject(m, projectId);
     const setMode = () => {
       const mode = (m.form.querySelector('input[name=mode]:checked') || {}).value;
       $('#f-cardpick', m.d).classList.toggle('hide', mode !== 'charge' || cards.length < 2);
@@ -829,7 +830,7 @@
         try {
           const pm = $('#f-card', m.d);
           const r = await api('invoices.create', { client_id: Number(sel.value), items, due_days: Number($('#f-due', m.d).value), memo: $('#f-memo', m.d).value, mode, pm_id: pm ? pm.value : '',
-            discount: disc.send, bank: chk('#f-bank'), remind: chk('#f-remind'), project: val('#f-project'), po: val('#f-po'), cc: val('#f-cc') });
+            discount: disc.send, bank: chk('#f-bank'), remind: chk('#f-remind'), project: val('#f-project'), po: val('#f-po'), cc: val('#f-cc'), project_id: projVal(m) });
           m.close();
           if (mode === 'link' && r.invoice.url) shareLink('Pay link ready', r.invoice.url, r.invoice, 'invoice');
           else toast(mode === 'email' ? 'Invoice emailed' : mode === 'charge' ? 'Card charged, invoice paid' : 'Draft saved');
@@ -857,14 +858,15 @@
     $('[data-copy]', m.d).addEventListener('click', () => copy(url));
   }
 
-  async function chargeForm(clientId) {
+  async function chargeForm(clientId, projectId) {
     const m = modal('Charge a card', html`<div class="fields">
-      ${await clientField(clientId)}
+      ${await clientField(clientId)}${projPick()}
       <div id="ch-card"></div>
       <div class="grid2"><div><label for="ch-amt">Amount</label><input id="ch-amt" inputmode="decimal" placeholder="0.00"></div>
         <div><label for="ch-desc">For</label><input id="ch-desc" maxlength="300" placeholder="What is it for?"></div></div>
     </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit" id="ch-go">Charge</button>`);
     const sel = $('#f-client', m.d);
+    wireProject(m, projectId);
     let cards = [];
     const load = async () => {
       cards = [];
@@ -888,16 +890,16 @@
       if (!confirm(`Charge ${money(c)} to ${$('#f-card', m.d).selectedOptions[0].textContent}?`)) return;
       await busy($('#ch-go', m.d), async () => {
         try {
-          const r = await api('charges.create', { client_id: Number(sel.value), pm_id: $('#f-card', m.d).value, amount_cents: c, description: $('#ch-desc', m.d).value });
+          const r = await api('charges.create', { client_id: Number(sel.value), pm_id: $('#f-card', m.d).value, amount_cents: c, description: $('#ch-desc', m.d).value, project_id: projVal(m) });
           m.close(); toast(r.ok ? 'Charged ' + money(c) : 'Charge is processing'); refresh();
         } catch (err) { m.err(err.message); }
       });
     });
   }
 
-  async function planForm(clientId) {
+  async function planForm(clientId, projectId) {
     const m = modal('New payment plan', html`<div class="fields">
-      ${await clientField(clientId)}
+      ${await clientField(clientId)}${projPick()}
       <div><label for="p-title">Name of the plan</label><input id="p-title" maxlength="120" placeholder="e.g. Website project"></div>
       <div class="grid2"><div><label for="p-total">Total amount</label><input id="p-total" inputmode="decimal" placeholder="0.00"></div>
         <div><label for="p-count">Number of payments</label><input id="p-count" inputmode="numeric" value="6"></div></div>
@@ -911,6 +913,7 @@
     </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit" id="p-go">Start plan</button>`);
     let every = 'month', cards = [], mail = '';
     const sel = $('#f-client', m.d);
+    wireProject(m, projectId);
     const preview = () => {
       const t = parseMoney($('#p-total', m.d).value), n = parseInt($('#p-count', m.d).value, 10), s = $('#p-start', m.d).value;
       const box = $('#p-prev', m.d);
@@ -952,7 +955,7 @@
       await busy($('#p-go', m.d), async () => {
         try {
           const pm = $('#f-card', m.d);
-          await api('plans.create', { client_id: Number(sel.value), title: $('#p-title', m.d).value, total_cents: t, count: n, every, start_date: $('#p-start', m.d).value, autopay: how === 'auto', pm_id: pm ? pm.value : '' });
+          await api('plans.create', { client_id: Number(sel.value), title: $('#p-title', m.d).value, total_cents: t, count: n, every, start_date: $('#p-start', m.d).value, autopay: how === 'auto', pm_id: pm ? pm.value : '', project_id: projVal(m) });
           m.close(); toast('Payment plan started'); refresh();
         } catch (err) { m.err(err.message); }
       });
@@ -1077,6 +1080,27 @@
     if (!list.length) return '';
     return html`<div><label for="${id}">Project (optional)</label><select id="${id}"><option value="">None</option>${list.map((p) => html`<option value="${p.id}" ${raw(String(p.id) === String(sel) ? 'selected' : '')}>${p.name}</option>`)}</select></div>`;
   }
+  // project picker on invoice, card charge and payment plan forms: follows the client, picks their only open project by itself
+  const projPick = () => on('f_projects') && !(member() && perms().projects === 'none')
+    ? html`<div id="f-projbox" class="hide"><label for="f-proj">Project</label><select id="f-proj"></select><div class="hint">The money shows up on the project by itself.</div></div>` : '';
+  async function wireProject(m, presetId) {
+    const box = $('#f-projbox', m.d); if (!box) return;
+    let list = [];
+    try { list = await projectsCache(); } catch (e) { return; }
+    const sel = $('#f-client', m.d);
+    const fill = () => {
+      const cid = Number(sel.value);
+      const mine = list.filter((p) => (cid && p.client_id === cid) || String(p.id) === String(presetId));
+      const open = mine.filter((p) => p.status !== 'done');
+      if (!mine.length) { box.classList.add('hide'); $('#f-proj', m.d).innerHTML = ''; return; }
+      const pick = presetId || (open.length === 1 ? open[0].id : '');
+      $('#f-proj', m.d).innerHTML = html`<option value="">No project</option>${mine.map((p) => html`<option value="${p.id}" ${raw(String(p.id) === String(pick) ? 'selected' : '')}>${p.name}${p.status === 'done' ? ' (done)' : ''}</option>`)}`.s;
+      box.classList.remove('hide');
+    };
+    sel.addEventListener('change', () => { presetId = null; fill(); });
+    fill();
+  }
+  const projVal = (m) => { const el = $('#f-proj', m.d); return el && el.value ? Number(el.value) : null; };
   const hrs = (min) => { const h = (min || 0) / 60; return (Math.round(h * 100) / 100).toLocaleString('en-US') + ' h'; };
   // "1.5", "1:30", "90m" → minutes
   function parseHours(s) {
@@ -1266,12 +1290,13 @@
         </div></div>
       <div class="kpis ${mny ? '' : 'three'}">
         ${kpi('Progress', pct + '%', `${done} of ${d.tasks.length} tasks done`)}
-        ${kpi(member() && !mny ? 'Your hours' : 'Hours', hrs(mny ? mny.labor.minutes : totalMin), mny ? 'all workers' : '')}
-        ${mny ? kpi('Cost so far', money(mny.cost), p.budget_cents ? 'budget ' + money(p.budget_cents) : 'no budget set', p.budget_cents && mny.cost > p.budget_cents ? 'neg' : '') : ''}
-        ${mny ? kpi('Profit', money(mny.profit), money(mny.income) + ' income recorded', mny.profit >= 0 ? 'pos' : 'neg') : d.myPay ? kpi('Your pay', money(d.myPay.owed), money(d.myPay.paid) + ' paid of ' + money(d.myPay.earned) + ' earned') : ''}
+        ${mny ? kpi('Money in', money(mny.in.total), mny.in.expected ? money(mny.in.expected) + ' still to come' : 'nothing waiting', 'pos')
+          : kpi(member() ? 'Your hours' : 'Hours', hrs(totalMin))}
+        ${mny ? kpi('Money out', money(mny.out.total), mny.out.expected ? money(mny.out.expected) + ' still to pay' : 'nothing left to pay', 'neg') : ''}
+        ${mny ? kpi('Profit so far', money(mny.profitNow), 'when all is paid: ' + money(mny.profitEnd), mny.profitEnd >= 0 ? 'pos' : 'neg')
+          : d.myPay ? kpi('Your pay', money(d.myPay.owed), money(d.myPay.paid) + ' paid of ' + money(d.myPay.earned) + ' earned') : ''}
       </div>
-      ${p.budget_cents && mny ? html`<div class="panel pad" style="margin-top:12px"><div class="progress"><i data-w="${Math.min(100, Math.round((mny.cost / p.budget_cents) * 100))}"></i></div>
-        <div class="hint">${Math.round((mny.cost / p.budget_cents) * 100)}% of the budget used</div></div>` : ''}
+      ${mny ? moneyPanels(d) : ''}
       <div class="cols" style="margin-top:8px">
         <div>
           <h2 class="sec">Tasks ${d.tasks.length ? html`<span class="muted">${done}/${d.tasks.length}</span>` : ''}</h2>
@@ -1292,13 +1317,6 @@
               <span></span><div class="amt">${pay ? html`${money(pay.owed)}<small>owed · ${money(pay.paid)} paid</small>` : ''}</div>
               ${c.pay && (!member() || mny) ? html`<div class="acts"><button class="btn ghost sm" data-act="pay-worker" data-worker="${w.worker_id}" data-project="${p.id}">Pay ${w.name.split(' ')[0]}</button></div>` : ''}</div>`;
           }) : empty(c.team ? 'Nobody on this project yet. Add people with Edit.' : 'No team yet.')}</div>
-          ${mny ? html`<h2 class="sec">Money</h2><div class="panel pl">
-            ${line('Income recorded', money(mny.income))}
-            ${line('Expenses and bills paid', '−' + money(mny.expenses))}
-            ${line('Team pay earned', '−' + money(mny.labor.earned))}
-            ${line(`· paid ${money(mny.labor.paid)} · still owed`, money(mny.labor.owed), 'sub')}
-            ${line('Profit', money(mny.profit), 'h t')}
-          </div><p class="hint">Tag income, expenses and bills with this project to see them here.</p>` : ''}
           <h2 class="sec">Updates</h2>
           <div class="panel feed">
             ${c.notes ? html`<form class="addnote" id="pnoteform" data-project="${p.id}"><input id="pnote" placeholder="Where things stand, a problem, what's next…" maxlength="2000"><button class="btn sm" type="submit">Post</button></form>` : ''}
@@ -1307,6 +1325,62 @@
           ${!member() ? html`<p style="margin-top:28px"><button class="btn danger sm" data-act="delete-project" data-id="${p.id}">Delete project</button></p>` : ''}
         </div>
       </div>`;
+  }
+
+  // where the project's money came from, what is still to come, what went out and what is still to pay. All automatic.
+  function moneyPanels(d) {
+    const mny = d.money, p = d.project, c = d.can;
+    const canInv = can('invoices', 'edit');
+    const due = (x) => x.due ? (x.late ? 'late, was due ' : 'due ') + fmtDate(x.due) : '';
+    const r = (main, sub, amt, cls, act) => html`<div class="row ${cls || ''}"><div class="main"><b>${main}</b><span>${sub}</span></div><span></span><div class="amt">${amt}</div>${act ? html`<div class="acts">${act}</div>` : ''}</div>`;
+    const grp = (title, total) => html`<div class="mgrp"><span>${title}</span><b class="num">${money(total)}</b></div>`;
+    const inRec = mny.in.received.map((x) => r(x.from, [fmtDate(x.date), x.how, x.note].filter(Boolean).join(' · '), money(x.amount), 'posi'));
+    const inCome = mny.in.coming.map((x) => r(x.from, [x.what, due(x)].filter(Boolean).join(' · '), money(x.amount), x.late ? 'neg' : '',
+      x.notInvoiced && canInv && d.client ? html`<button class="btn sm" data-act="new-invoice" data-client="${d.client.id}" data-project="${p.id}">Invoice it</button>`
+        : x.url ? html`<a class="btn ghost sm" href="${safeUrl(x.url)}" target="_blank" rel="noopener">Pay link</a>` : ''));
+    const outPaid = mny.out.paid.map((x) => r(x.to, [fmtDate(x.date), x.what, x.how].filter(Boolean).join(' · '), money(x.amount), 'neg'));
+    const outTo = mny.out.toPay.map((x) => r(x.to, [x.what, due(x)].filter(Boolean).join(' · '), money(x.amount), x.late ? 'neg' : '',
+      x.bill && can('bills', 'edit') ? html`<button class="btn sm" data-act="pay-bill-id" data-id="${x.bill}">Pay</button>`
+        : x.worker && c.pay ? html`<button class="btn sm" data-act="pay-worker" data-worker="${x.worker}" data-project="${p.id}">Pay</button>` : ''));
+    const used = p.budget_cents ? Math.round((mny.cost / p.budget_cents) * 100) : 0;
+    return html`
+      ${mny.stripeOk ? '' : html`<div class="banner" style="margin-top:14px">Could not reach Stripe just now, so online payments may be missing below. Refresh in a minute.</div>`}
+      <div class="cols money" style="margin-top:8px">
+        <div><h2 class="sec">Money in</h2>
+          <div class="panel rows">
+            ${grp('Came in', mny.in.total)}${inRec.length ? inRec : empty('Nothing yet.')}
+            ${grp('Still to come', mny.in.expected)}${inCome.length ? inCome : empty(mny.price ? 'Nothing left. All paid.' : 'Nothing waiting.')}
+          </div>
+          ${canInv && d.client ? html`<div class="addacts"><button class="btn ghost sm" data-act="new-invoice" data-client="${d.client.id}" data-project="${p.id}">${raw(ICON.invoice)}New invoice</button>
+            <button class="btn ghost sm" data-act="link-invoices" data-id="${p.id}" data-client="${d.client.id}">Add an invoice made before</button></div>` : ''}
+          <p class="hint">${mny.price ? `Price to the client: ${money(mny.price)}. ` : 'Set the price on the project (Edit) to see what is not invoiced yet. '}Invoices, card charges and payment plans for this project, and income tagged with it in Books, show here by themselves.</p>
+        </div>
+        <div><h2 class="sec">Money out</h2>
+          <div class="panel rows">
+            ${grp('Paid', mny.out.total)}${outPaid.length ? outPaid : empty('Nothing yet.')}
+            ${grp('Still to pay', mny.out.expected)}${outTo.length ? outTo : empty('Nothing to pay.')}
+          </div>
+          ${p.budget_cents ? html`<div class="panel pad" style="margin-top:10px"><div class="progress"><i data-w="${Math.min(100, used)}"></i></div>
+            <div class="hint">${used}% of the ${money(p.budget_cents)} budget (paid and still to pay)</div></div>` : ''}
+          <p class="hint">Bills for this project, team pay from logged hours, and expenses tagged with it in Books show here by themselves.</p>
+        </div>
+      </div>`;
+  }
+
+  async function linkInvoicesForm(projectId, clientId) {
+    const all = (await api('invoices.list', {})).invoices.filter((i) => String(i.client_id) === String(clientId) && !i.project_id && i.status !== 'void');
+    if (!all.length) return toast('No other invoices for this client');
+    const m = modal('Add invoices to this project', html`<div class="fields"><div class="choices">${all.map((i) => html`<label class="choice"><input type="checkbox" value="${i.id}"><div><b>${i.number || 'Draft'} · ${money(i.total)}</b><span>${[fmtDate(i.created), i.status === 'open' ? (i.overdue ? 'late' : 'waiting') : i.status, i.lines.map((l) => l.description).join(', ')].filter(Boolean).join(' · ')}</span></div></label>`)}</div></div>`,
+      html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Add</button>`);
+    m.form.addEventListener('submit', async (e) => {
+      e.preventDefault(); m.err('');
+      const ids = $$('input:checked', m.d).map((x) => x.value);
+      if (!ids.length) return m.err('Pick at least one');
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try { for (const id of ids) await api('invoices.link', { id, project_id: Number(projectId) }); m.close(); toast('Added'); refresh(); }
+        catch (err) { m.err(err.message); }
+      });
+    });
   }
 
   async function projectForm(id) {
@@ -1320,8 +1394,9 @@
     const m = modal(id ? 'Edit project' : 'New project', html`<div class="fields">
       <div><label for="p-name">Project name</label><input id="p-name" value="${p.name || ''}" maxlength="120" required></div>
       ${showClient ? await clientField(p.client_id, 'p-client') : ''}
-      <div class="grid2"><div><label for="p-status">Status</label><select id="p-status">${PSTATUS.map(([v, l]) => html`<option value="${v}" ${raw(p.status === v ? 'selected' : '')}>${l}</option>`)}</select></div>
-        ${showBudget ? html`<div><label for="p-budget">Budget (optional)</label><input id="p-budget" inputmode="decimal" placeholder="0.00" value="${p.budget_cents ? plain(p.budget_cents) : ''}"></div>` : '<div></div>'}</div>
+      <div><label for="p-status">Status</label><select id="p-status">${PSTATUS.map(([v, l]) => html`<option value="${v}" ${raw(p.status === v ? 'selected' : '')}>${l}</option>`)}</select></div>
+      ${showBudget ? html`<div class="grid2"><div><label for="p-price">Price to the client (optional)</label><input id="p-price" inputmode="decimal" placeholder="0.00" value="${p.price_cents ? plain(p.price_cents) : ''}"><div class="hint">Shows what is not invoiced yet</div></div>
+        <div><label for="p-budget">Budget for costs (optional)</label><input id="p-budget" inputmode="decimal" placeholder="0.00" value="${p.budget_cents ? plain(p.budget_cents) : ''}"><div class="hint">Warns when costs go over</div></div></div>` : ''}
       <div class="grid2"><div><label for="p-start">Start</label><input id="p-start" type="date" value="${p.start_date || ''}"></div>
         <div><label for="p-due">Due</label><input id="p-due" type="date" value="${p.due_date || ''}"></div></div>
       <div><label for="p-desc">About the project</label><textarea id="p-desc" maxlength="4000" placeholder="What, for whom, what done looks like">${p.description || ''}</textarea></div>
@@ -1335,8 +1410,9 @@
     </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
     m.form.addEventListener('submit', async (ev) => {
       ev.preventDefault(); m.err('');
-      let budget = null;
+      let budget = null, price = null;
       if (showBudget && $('#p-budget', m.d).value.trim()) { budget = parseMoney($('#p-budget', m.d).value); if (isNaN(budget)) return m.err('Budget should be a number, like 5000'); }
+      if (showBudget && $('#p-price', m.d).value.trim()) { price = parseMoney($('#p-price', m.d).value); if (isNaN(price)) return m.err('Price should be a number, like 12000'); }
       let teamOut;
       if (owner) {
         teamOut = [];
@@ -1352,7 +1428,7 @@
         try {
           const args = { id: id ? Number(id) : undefined, name: $('#p-name', m.d).value, status: $('#p-status', m.d).value, start_date: $('#p-start', m.d).value, due_date: $('#p-due', m.d).value, description: $('#p-desc', m.d).value };
           if (showClient) args.client_id = $('#p-client', m.d).value ? Number($('#p-client', m.d).value) : null;
-          if (showBudget) args.budget_cents = budget;
+          if (showBudget) { args.budget_cents = budget; args.price_cents = price; }
           if (owner) args.team = teamOut;
           const r = await api('projects.save', args);
           state.projects = null;
@@ -1723,9 +1799,9 @@
           if (!confirm('Delete this client from the CRM? Their invoices and payments stay in Stripe.')) return;
           await api('clients.delete', { id: Number(t.dataset.id) }); await clientsCache(true); toast('Client deleted'); location.hash = '#/clients'; return;
         }
-        case 'new-invoice': return invoiceForm(t.dataset.client);
-        case 'new-charge': return chargeForm(t.dataset.client);
-        case 'new-plan': return planForm(t.dataset.client);
+        case 'new-invoice': return invoiceForm(t.dataset.client, t.dataset.project);
+        case 'new-charge': return chargeForm(t.dataset.client, t.dataset.project);
+        case 'new-plan': return planForm(t.dataset.client, t.dataset.project);
         case 'new-entry': return entryForm(t.dataset.kind);
         case 'edit-entry': return entryForm(null, t.dataset.id);
         case 'inv': return invAction(t.dataset.a, t.dataset.id, t);
@@ -1785,6 +1861,8 @@
           await api('workers.delete', { id: Number(t.dataset.id) }); state.team = null; toast('Deleted'); location.hash = '#/team'; return;
         }
         case 'pay-worker': return payWorkerForm(t.dataset.worker, t.dataset.project);
+        case 'pay-bill-id': { const r = await api('bills.get', { id: Number(t.dataset.id) }); return payBillForm(r.bill); }
+        case 'link-invoices': return linkInvoicesForm(t.dataset.id, t.dataset.client);
         case 'period-go': {
           const id = t.dataset.id, st = id === 'bk' ? books : rep;
           st.from = $(`[data-from="${id}"]`).value; st.to = $(`[data-to="${id}"]`).value;

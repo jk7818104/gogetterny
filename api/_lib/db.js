@@ -179,6 +179,15 @@ create table if not exists project_notes (
 alter table entries add column if not exists project_id int references projects(id) on delete set null;
 alter table entries add column if not exists worker_id int references workers(id) on delete set null;
 alter table bills add column if not exists project_id int references projects(id) on delete set null;
+alter table plans add column if not exists project_id int references projects(id) on delete set null;
+alter table projects add column if not exists price_cents bigint;
+create table if not exists project_links (
+  stripe_id text primary key,
+  kind text not null,
+  project_id int not null references projects(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create index if not exists project_links_project on project_links(project_id);
 create index if not exists tasks_project on tasks(project_id);
 create index if not exists time_project on time_logs(project_id, worker_id);
 create index if not exists notes_project on project_notes(project_id, created_at);

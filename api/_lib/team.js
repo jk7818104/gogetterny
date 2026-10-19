@@ -51,7 +51,7 @@ export function normPerms(p) {
 /** Ops tied to an admin section, and the level they need. */
 const SECTION_OPS = {
   'clients.list': ['clients', 'view'], 'clients.get': ['clients', 'view'], 'clients.save': ['clients', 'edit'], 'clients.delete': ['clients', 'edit'], 'activity.add': ['clients', 'edit'],
-  'invoices.list': ['invoices', 'view'], 'invoices.create': ['invoices', 'edit'], 'invoices.action': ['invoices', 'edit'],
+  'invoices.list': ['invoices', 'view'], 'invoices.create': ['invoices', 'edit'], 'invoices.action': ['invoices', 'edit'], 'invoices.link': ['invoices', 'edit'],
   'charges.list': ['payments', 'view'], 'charges.create': ['payments', 'edit'], 'charges.refund': ['payments', 'edit'],
   'cards.list': ['payments', 'view'], 'cards.link': ['payments', 'edit'], 'cards.test': ['payments', 'edit'], 'cards.remove': ['payments', 'edit'],
   'plans.list': ['plans', 'view'], 'plans.create': ['plans', 'edit'], 'plans.cancel': ['plans', 'edit'],

@@ -207,12 +207,29 @@ async function activityAdd(/** @type {any} */ b) {
   return { ok: true };
 }
 
+// ---------- project links (money in that belongs to a project) ----------
+/** The project picked on a form, checked. @param {any} v */
+async function pickProject(v) {
+  if (!v) return null;
+  const p = await one(`select id, name from projects where id=$1`, [intId(v)]);
+  if (!p) throw new HttpError(400, 'Project not found');
+  return p;
+}
+/** @param {string} stripeId @param {string} kind @param {number|null} projectId */
+async function linkProject(stripeId, kind, projectId) {
+  if (!projectId) { await q(`delete from project_links where stripe_id=$1`, [stripeId]); return; }
+  await q(`insert into project_links(stripe_id, kind, project_id) values ($1,$2,$3) on conflict (stripe_id) do update set project_id=excluded.project_id`, [stripeId, kind, projectId]);
+}
+
 // ---------- invoices ----------
 async function invoicesList(/** @type {any} */ b) {
   const st = needStripe();
   const status = ['draft', 'open', 'paid', 'void', 'uncollectible'].includes(b.status) ? b.status : undefined;
-  const [inv, names] = await Promise.all([st.invoices.list({ limit: 100, status }), customerNames()]);
-  return { invoices: inv.data.map((i) => mapInvoice(i, names)) };
+  const [inv, names, links] = await Promise.all([st.invoices.list({ limit: 100, status }), customerNames(),
+    q(`select l.stripe_id, l.project_id, p.name from project_links l join projects p on p.id=l.project_id where l.kind='invoice'`)]);
+  /** @type {Record<string, any>} */
+  const lk = Object.fromEntries(links.map((l) => [l.stripe_id, l]));
+  return { invoices: inv.data.map((i) => ({ ...mapInvoice(i, names), project_id: lk[i.id]?.project_id || null, project_name: lk[i.id]?.name || '' })) };
 }
 
 /** Email a finalized invoice: from GO GETTER when email is connected, otherwise through Stripe. @param {any} inv @param {any} settings */
@@ -263,6 +280,7 @@ async function invoicesCreate(/** @type {any} */ b) {
   const bank = !!b.bank && mode !== 'charge';
   const remind = !!b.remind && mode !== 'charge';
   const settings = await getSettings();
+  const proj = await pickProject(b.project_id);
 
   let pm = '';
   if (mode === 'charge') pm = await pickCard(c, b.pm_id);
@@ -273,6 +291,7 @@ async function invoicesCreate(/** @type {any} */ b) {
   if (remind) meta.gg_remind = '1';
   if (cc.length) meta.gg_cc = cc.join(',');
   if (mode === 'charge') meta.gg_by = 'admin';
+  if (proj) meta.gg_project = String(proj.id);
   let inv = await st.invoices.create({
     customer,
     collection_method: mode === 'charge' ? 'charge_automatically' : 'send_invoice',
@@ -289,6 +308,7 @@ async function invoicesCreate(/** @type {any} */ b) {
       metadata: { gg_qty: String(l.qty), gg_unit: String(l.unit), gg_desc: l.desc.slice(0, 450) } });
   }
   if (disc) await st.invoiceItems.create({ customer, invoice: inv.id, amount: -disc, currency: 'usd', description: discLabel });
+  if (proj) await linkProject(inv.id, 'invoice', proj.id);
   const total = subtotal - disc;
   let via = '';
   if (mode !== 'draft') inv = await st.invoices.finalizeInvoice(inv.id, { auto_advance: false });
@@ -335,8 +355,9 @@ async function invoicesAction(/** @type {any} */ b) {
       inv = await st.invoices.pay(id, { paid_out_of_band: true });
       // money that did not go through Stripe goes into the books by hand
       if (amount > 0) {
-        await q(`insert into entries(kind, date, amount_cents, category, party, method, client_id, note) values ('income',$1,$2,'Invoices',$3,$4,$5,$6)`,
-          [nyDay(Date.now()), amount, names[cust]?.name || inv.customer_name || '', method, clientId, `Invoice ${inv.number} paid by ${method}`]);
+        const link = await one(`select project_id from project_links where stripe_id=$1`, [id]);
+        await q(`insert into entries(kind, date, amount_cents, category, party, method, client_id, note, project_id) values ('income',$1,$2,'Invoices',$3,$4,$5,$6,$7)`,
+          [nyDay(Date.now()), amount, names[cust]?.name || inv.customer_name || '', method, clientId, `Invoice ${inv.number} paid by ${method}`, link?.project_id || null]);
       }
       await log(clientId, 'payment', `Invoice ${inv.number} marked paid (${method}) ${money(amount)}`);
       break;
@@ -354,6 +375,20 @@ async function invoicesAction(/** @type {any} */ b) {
     default: throw new HttpError(400, 'Unknown action');
   }
   return { invoice: mapInvoice(inv, names) };
+}
+
+/** Put an existing invoice on a project (or take it off). */
+async function invoicesLink(/** @type {any} */ b) {
+  const st = needStripe();
+  const id = str(b.id, 80);
+  if (!/^in_/.test(id)) throw new HttpError(400, 'Bad invoice id');
+  const proj = await pickProject(b.project_id);
+  const inv = await st.invoices.retrieve(id);
+  await st.invoices.update(id, { metadata: { gg_project: proj ? String(proj.id) : '' } });
+  await linkProject(id, 'invoice', proj ? proj.id : null);
+  // money already marked paid by hand follows the invoice
+  if (inv.number) await q(`update entries set project_id=$1 where kind='income' and category='Invoices' and note like $2`, [proj ? proj.id : null, `Invoice ${inv.number} paid by %`]);
+  return { ok: true };
 }
 
 // ---------- cards & charges ----------
@@ -417,11 +452,13 @@ async function chargesCreate(/** @type {any} */ b) {
   const description = str(b.description, 300);
   if (!description) throw new HttpError(400, 'Say what the charge is for');
   const pm = await pickCard(c, b.pm_id);
+  const proj = await pickProject(b.project_id);
   const pi = await st.paymentIntents.create({
     amount, currency: 'usd', customer: c.stripe_customer_id, payment_method: pm,
     off_session: true, confirm: true, description,
-    metadata: { gg_client_id: String(c.id) }
+    metadata: { gg_client_id: String(c.id), ...(proj ? { gg_project: String(proj.id) } : {}) }
   });
+  if (proj) await linkProject(pi.id, 'charge', proj.id);
   await log(c.id, 'payment', `Card charged ${money(amount)}: ${description}`);
   await q(`update clients set status='active', updated_at=now() where id=$1 and status='lead'`, [c.id]);
   return { ok: pi.status === 'succeeded', status: pi.status };
@@ -492,6 +529,7 @@ async function plansCreate(/** @type {any} */ b) {
   const start = b.start_date ? day(b.start_date, 'Start date') : today;
   if (start < today) throw new HttpError(400, 'Start date cannot be in the past');
   const autopay = !!b.autopay;
+  const proj = await pickProject(b.project_id);
   if (!autopay && !c.email) throw new HttpError(400, 'This client has no email for the monthly invoices. Add one, or choose "Charge card automatically".');
   const pm = autopay ? await pickCard(c, b.pm_id) : '';
   const customer = await ensureCustomer(c);
@@ -513,10 +551,10 @@ async function plansCreate(/** @type {any} */ b) {
       ? { collection_method: 'charge_automatically', default_payment_method: pm }
       : { collection_method: 'send_invoice', invoice_settings: { days_until_due: 7 } },
     phases,
-    metadata: { gg_client_id: String(c.id), gg_title: title }
+    metadata: { gg_client_id: String(c.id), gg_title: title, ...(proj ? { gg_project: String(proj.id) } : {}) }
   });
-  const r = await one(`insert into plans(client_id, schedule_id, title, total_cents, count, every, start_date, autopay) values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
-    [c.id, sched.id, title, total, count, every, start, autopay]);
+  const r = await one(`insert into plans(client_id, schedule_id, title, total_cents, count, every, start_date, autopay, project_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning *`,
+    [c.id, sched.id, title, total, count, every, start, autopay, proj ? proj.id : null]);
   await log(c.id, 'plan', `Payment plan "${title}": ${money(total)} in ${count} ${every === 'week' ? 'weekly' : 'monthly'} payments${autopay ? ', card charged automatically' : ', invoice emailed each time'}`);
   await q(`update clients set status='active', updated_at=now() where id=$1 and status='lead'`, [c.id]);
   return { plan: await planStatus(r) };
@@ -827,6 +865,7 @@ export const OPS = {
   'invoices.list': invoicesList,
   'invoices.create': invoicesCreate,
   'invoices.action': invoicesAction,
+  'invoices.link': invoicesLink,
   'cards.list': cardsList,
   'cards.link': cardLink,
   'cards.test': cardTest,

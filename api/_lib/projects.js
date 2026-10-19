@@ -5,6 +5,7 @@ import { q, one } from './db.js';
 import { HttpError, str, cents, intId, day, email } from './http.js';
 import { hashPassword } from './auth.js';
 import { normPerms, hasSection } from './team.js';
+import { stripe, stripeKey } from './stripe.js';
 
 const TZ = 'America/New_York';
 const nyDay = (/** @type {number} */ ms) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
@@ -81,6 +82,125 @@ async function labor(f = {}) {
 const sumLabor = (/** @type {Record<number, any>} */ by) => Object.values(by).reduce((s, r) => ({
   minutes: s.minutes + r.minutes, earned: s.earned + r.earned, paid: s.paid + r.paid, owed: s.owed + r.owed }), { minutes: 0, earned: 0, paid: 0, owed: 0 });
 
+// ---------- money in and out of one project, worked out by itself ----------
+const idOf = (/** @type {any} */ x) => (x && typeof x === 'object' ? x.id : x) || null;
+const sec = (/** @type {number|null|undefined} */ s) => (s ? nyDay(s * 1000) : null);
+
+/**
+ * Where the project's money came from and where it still has to come from, and the same for money going out.
+ * Nothing here is entered by hand on the project: it comes from invoices, card charges and payment plans made
+ * for the project, money tagged with the project in Books, bills for the project, and the team's hours and pay.
+ * @param {any} p
+ */
+async function projectMoney(p) {
+  const today = nyDay(Date.now());
+  /** @type {any[]} */ const received = [];
+  /** @type {any[]} */ const coming = [];
+  /** @type {any[]} */ const paid = [];
+  /** @type {any[]} */ const toPay = [];
+  const [links, plans, entries, bills, lab, team] = await Promise.all([
+    q(`select stripe_id, kind from project_links where project_id=$1 order by created_at`, [p.id]),
+    q(`select * from plans where project_id=$1 order by created_at`, [p.id]),
+    q(`select e.*, w.name as worker_name from entries e left join workers w on w.id=e.worker_id where e.project_id=$1 order by e.date, e.id`, [p.id]),
+    q(`select b.*, coalesce((select sum(e.amount_cents) from entries e where e.bill_id=b.id and e.kind='expense'),0)::bigint as paid_cents from bills b where b.project_id=$1 order by b.due_date nulls last`, [p.id]),
+    labor({ project: p.id }),
+    q(`select w.id, w.name from project_workers pw join workers w on w.id=pw.worker_id where pw.project_id=$1`, [p.id])
+  ]);
+  let stripeOk = true;
+  if (stripeKey() && (links.length || plans.length)) {
+    const st = stripe();
+    try {
+      const got = await Promise.all(links.slice(0, 150).map((l) => (l.kind === 'invoice'
+        ? st.invoices.retrieve(l.stripe_id)
+        : st.paymentIntents.retrieve(l.stripe_id, { expand: ['latest_charge'] })).then((x) => ({ l, x })).catch(() => ({ l, x: null }))));
+      for (const { l, x } of got) {
+        if (!x) continue;
+        const i = /** @type {any} */ (x);
+        if (l.kind === 'invoice') {
+          const label = 'Invoice ' + (i.number || '(draft)');
+          if (i.status === 'paid' && !i.paid_out_of_band) received.push({ date: sec(i.status_transitions?.paid_at || i.created), from: label, how: 'Paid online', amount: i.amount_paid, invoice: i.id });
+          else if (i.status === 'open') {
+            if (i.amount_paid) received.push({ date: sec(i.created), from: label + ' (part)', how: 'Paid online', amount: i.amount_paid, invoice: i.id });
+            const due = sec(i.due_date);
+            coming.push({ from: label, due, late: !!(due && due < today), amount: i.amount_remaining, invoice: i.id, url: i.hosted_invoice_url || null, what: 'Sent, waiting for payment' });
+          } else if (i.status === 'draft') coming.push({ from: label, amount: i.total, invoice: i.id, what: 'Draft, not sent yet', draft: true });
+          // paid by hand (cash, check, Zelle): counted from Books below. Void: nothing.
+        } else if (i.status === 'succeeded') {
+          const ch = i.latest_charge && typeof i.latest_charge === 'object' ? i.latest_charge : null;
+          const net = i.amount_received - (ch ? ch.amount_refunded : 0);
+          if (net > 0) received.push({ date: sec(i.created), from: 'Card charge' + (i.description ? ': ' + i.description : ''), how: 'Card', amount: net });
+        }
+      }
+      for (const pl of plans.slice(0, 20)) {
+        let paidCents = 0, paidN = 0, next = null;
+        try {
+          const s = await st.subscriptionSchedules.retrieve(pl.schedule_id);
+          const sub = idOf(s.subscription);
+          if (sub) {
+            const inv = await st.invoices.list({ subscription: sub, limit: 100 });
+            for (const i of inv.data) if (i.status === 'paid') {
+              paidCents += i.amount_paid; paidN++;
+              received.push({ date: sec(i.status_transitions?.paid_at || i.created), from: `Payment plan "${pl.title}" (${paidN} of ${pl.count})`, how: pl.autopay ? 'Card, automatic' : 'Paid online', amount: i.amount_paid });
+            }
+          }
+          if (s.status === 'canceled' || s.status === 'released') continue;   // stopped: nothing more will come
+          next = addMonthsOrWeeks(pl.start_date, pl.every, paidN);
+        } catch (e) { stripeOk = false; continue; }
+        const left = Math.max(0, pl.total_cents - paidCents);
+        if (left) coming.push({ from: `Payment plan "${pl.title}"`, amount: left, due: next, what: `${paidN} of ${pl.count} paid, ${pl.autopay ? 'card charged automatically' : 'invoice emailed each time'}` });
+      }
+    } catch (e) { stripeOk = false; }
+  }
+  for (const e of entries) {
+    if (e.kind === 'income') {
+      // an invoice marked paid by hand (cash, check, Zelle) shows as that invoice
+      const m = e.category === 'Invoices' && /^Invoice (\S+) paid by/.exec(e.note || '');
+      received.push(m ? { date: e.date, from: 'Invoice ' + m[1], how: (e.method || 'Paid') + ', marked paid', amount: e.amount_cents, entry: e.id }
+        : { date: e.date, from: e.party || e.category, how: e.method || '', amount: e.amount_cents, note: e.note, entry: e.id });
+    }
+    else paid.push({ date: e.date, to: e.worker_name || e.party || e.category, what: e.worker_id ? 'Team pay' : e.bill_id ? 'Bill' : e.category, how: e.method || '', amount: e.amount_cents, worker: e.worker_id, bill: e.bill_id, entry: e.id });
+  }
+  for (const b of bills) {
+    const left = b.amount_cents - b.paid_cents;
+    if (left > 0) toPay.push({ to: b.vendor + (b.number ? ' #' + b.number : ''), what: b.paid_cents ? 'Bill, part paid' : 'Bill', due: b.due_date, late: !!(b.due_date && b.due_date < today), amount: left, bill: b.id });
+  }
+  const names = Object.fromEntries(team.map((w) => [w.id, w.name]));
+  for (const [wid, r] of Object.entries(lab)) {
+    if (r.owed <= 0) continue;
+    const parts = [r.fixed ? `fixed ${centsStr(r.fixed)}` : '', r.minutes ? `${Math.round(r.minutes / 60 * 100) / 100} h logged` : ''].filter(Boolean).join(' + ');
+    toPay.push({ to: names[/** @type {any} */ (wid)] || (await one(`select name from workers where id=$1`, [wid]))?.name || 'Team member', what: `Team pay (${parts}, ${centsStr(r.paid)} paid)`, amount: r.owed, worker: Number(wid) });
+  }
+  const sum = (/** @type {any[]} */ l) => l.reduce((s, x) => s + x.amount, 0);
+  const t = { received: sum(received), coming: sum(coming), paid: sum(paid), toPay: sum(toPay) };
+  // the agreed price that has no invoice yet
+  if (p.price_cents) {
+    const notYet = p.price_cents - t.received - t.coming;
+    if (notYet > 0) { coming.push({ from: 'Not invoiced yet', amount: notYet, what: `Price ${centsStr(p.price_cents)}, invoiced so far ${centsStr(t.received + t.coming)}`, notInvoiced: true }); t.coming += notYet; }
+  }
+  const byDate = (/** @type {any} */ a, /** @type {any} */ b) => ((a.date || a.due || '9999') < (b.date || b.due || '9999') ? -1 : 1);
+  received.sort(byDate); paid.sort(byDate); coming.sort(byDate); toPay.sort(byDate);
+  return {
+    price: p.price_cents || null, budget: p.budget_cents || null, stripeOk,
+    in: { received, coming, ...{ total: t.received, expected: t.coming } },
+    out: { paid, toPay, total: t.paid, expected: t.toPay },
+    profitNow: t.received - t.paid,
+    profitEnd: t.received + t.coming - t.paid - t.toPay,
+    cost: t.paid + t.toPay,
+    labor: sumLabor(lab), byWorker: lab
+  };
+}
+/** @param {string} ymd @param {string} every @param {number} n */
+function addMonthsOrWeeks(ymd, every, n) {
+  if (every === 'week') return addDays(ymd, 7 * n);
+  const d = new Date(ymd + 'T12:00:00Z');
+  const want = d.getUTCDate();
+  d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(want, last));
+  return d.toISOString().slice(0, 10);
+}
+const centsStr = (/** @type {number} */ c) => '$' + (c / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 // ---------- projects ----------
 async function projectsList(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
   const ids = await visibleIds(ctx);
@@ -94,7 +214,7 @@ async function projectsList(/** @type {any} */ b, /** @type {any} */ req, /** @t
     from projects p left join clients c on c.id=p.client_id
     order by (p.status='done'), p.due_date nulls last, p.id desc limit 1000`);
   const out = rows.filter((p) => !ids || ids.has(p.id)).map((p) => {
-    if (!seesMoney(ctx)) { delete p.budget_cents; delete p.spent; delete p.income; }
+    if (!seesMoney(ctx)) { delete p.budget_cents; delete p.price_cents; delete p.spent; delete p.income; }
     if (!seesMoney(ctx) && !ctx.owner && !ctx.perms.project_edit) delete p.minutes;
     if (!seesClient(ctx)) { delete p.client_id; delete p.client_name; }
     return p;
@@ -119,17 +239,8 @@ async function projectsGet(/** @type {any} */ b, /** @type {any} */ req, /** @ty
   if (!seesClient(ctx)) delete p.client_id;
   /** @type {any} */
   let money = null;
-  if (seesMoney(ctx)) {
-    const [m, lab] = await Promise.all([
-      one(`select coalesce(sum(amount_cents) filter (where kind='income'),0)::bigint as income,
-                  coalesce(sum(amount_cents) filter (where kind='expense' and worker_id is null),0)::bigint as expenses
-           from entries where project_id=$1`, [p.id]),
-      labor({ project: p.id })
-    ]);
-    const l = sumLabor(lab);
-    money = { budget: p.budget_cents, income: m.income, expenses: m.expenses, labor: l,
-      cost: m.expenses + l.earned, profit: m.income - m.expenses - l.earned, byWorker: lab };
-  } else delete p.budget_cents;
+  if (seesMoney(ctx)) money = await projectMoney(p);
+  else { delete p.budget_cents; delete p.price_cents; }
   /** @type {any} */
   let myPay = null;
   if (mine && ctx.perms.pay) myPay = (await labor({ worker: mine, project: p.id }))[mine] || { minutes: 0, earned: 0, paid: 0, owed: 0 };
@@ -155,13 +266,14 @@ async function projectsSave(/** @type {any} */ b, /** @type {any} */ req, /** @t
   if (start && due && due < start) throw new HttpError(400, 'Due date is before the start date');
   const client = seesClient(ctx) ? optId(b.client_id) : old ? old.client_id : null;
   const budget = seesMoney(ctx) ? (b.budget_cents ? cents(b.budget_cents, 'Budget') : null) : old ? old.budget_cents : null;
-  const f = [name, client, status, start, due, budget, str(b.description, 4000)];
+  const price = seesMoney(ctx) ? (b.price_cents ? cents(b.price_cents, 'Price') : null) : old ? old.price_cents : null;
+  const f = [name, client, status, start, due, budget, str(b.description, 4000), price];
   let id;
   if (old) {
-    await q(`update projects set name=$1, client_id=$2, status=$3, start_date=$4, due_date=$5, budget_cents=$6, description=$7, updated_at=now() where id=$8`, [...f, old.id]);
+    await q(`update projects set name=$1, client_id=$2, status=$3, start_date=$4, due_date=$5, budget_cents=$6, description=$7, price_cents=$8, updated_at=now() where id=$9`, [...f, old.id]);
     id = old.id;
   } else {
-    id = (await one(`insert into projects(name, client_id, status, start_date, due_date, budget_cents, description) values ($1,$2,$3,$4,$5,$6,$7) returning id`, f)).id;
+    id = (await one(`insert into projects(name, client_id, status, start_date, due_date, budget_cents, description, price_cents) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`, f)).id;
   }
   if (ctx.owner && Array.isArray(b.team)) {
     const seen = new Set();
