@@ -7,6 +7,7 @@ import { getSettings, saveSettings, getKV, setKV } from './settings.js';
 import { emailReady, fromAddress, sendEmail } from './email.js';
 import { testEmail } from './templates.js';
 import { emailInvoiceDoc } from './docs.js';
+import { PROJECT_OPS } from './projects.js';
 
 const TZ = 'America/New_York';
 
@@ -536,7 +537,8 @@ async function entriesList(/** @type {any} */ b) {
   const from = b.from ? day(b.from) : '1900-01-01';
   const to = b.to ? day(b.to) : '2999-12-31';
   const kind = b.kind === 'income' || b.kind === 'expense' ? b.kind : null;
-  const rows = await q(`select e.*, c.name as client_name from entries e left join clients c on c.id=e.client_id
+  const rows = await q(`select e.*, c.name as client_name, p.name as project_name from entries e left join clients c on c.id=e.client_id
+    left join projects p on p.id=e.project_id
     where e.date between $1 and $2 and ($3::text is null or e.kind=$3) order by e.date desc, e.id desc limit 2000`, [from, to, kind]);
   return { entries: rows };
 }
@@ -544,18 +546,96 @@ async function entriesList(/** @type {any} */ b) {
 async function entriesSave(/** @type {any} */ b) {
   const kind = b.kind === 'income' ? 'income' : 'expense';
   const f = [kind, day(b.date), cents(b.amount_cents), str(b.category, 60) || 'Other', str(b.party, 120), str(b.method, 40),
-    b.client_id ? intId(b.client_id) : null, str(b.note, 1000)];
+    b.client_id ? intId(b.client_id) : null, str(b.note, 1000), b.project_id ? intId(b.project_id) : null];
   if (b.id) {
-    await q(`update entries set kind=$1, date=$2, amount_cents=$3, category=$4, party=$5, method=$6, client_id=$7, note=$8 where id=$9`, [...f, intId(b.id)]);
+    await q(`update entries set kind=$1, date=$2, amount_cents=$3, category=$4, party=$5, method=$6, client_id=$7, note=$8, project_id=$9 where id=$10`, [...f, intId(b.id)]);
     return { id: Number(b.id) };
   }
-  const r = await one(`insert into entries(kind, date, amount_cents, category, party, method, client_id, note) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`, f);
+  const r = await one(`insert into entries(kind, date, amount_cents, category, party, method, client_id, note, project_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, f);
   return { id: r.id };
 }
 
 async function entriesDelete(/** @type {any} */ b) {
   await q(`delete from entries where id=$1`, [intId(b.id)]);
   return { ok: true };
+}
+
+// ---------- bills (money we owe suppliers) ----------
+// A bill is what a supplier asked us to pay. Each payment is an expense in the books with bill_id set,
+// so the books and the bill can never disagree. Deleting a payment in Books makes the bill unpaid again.
+const BILL_SELECT = `select b.*, c.name as client_name, p.name as project_name,
+    coalesce((select sum(e.amount_cents) from entries e where e.bill_id=b.id and e.kind='expense'), 0)::bigint as paid_cents
+  from bills b left join clients c on c.id=b.client_id left join projects p on p.id=b.project_id`;
+
+/** @param {any} b @param {string} today */
+function mapBill(b, today) {
+  const left = Math.max(0, b.amount_cents - b.paid_cents);
+  const status = left === 0 ? 'paid' : b.due_date && b.due_date < today ? 'overdue' : b.paid_cents > 0 ? 'partial' : 'open';
+  return { ...b, left_cents: left, status };
+}
+
+async function billsList() {
+  const today = nyDay(Date.now());
+  const week = addDays(today, 7);
+  const bills = (await q(BILL_SELECT + ` order by b.bill_date desc, b.id desc limit 2000`)).map((b) => mapBill(b, today));
+  const unpaid = bills.filter((b) => b.left_cents > 0)
+    .sort((a, b) => (a.due_date || '9999') < (b.due_date || '9999') ? -1 : (a.due_date || '9999') > (b.due_date || '9999') ? 1 : 0);
+  const sum = (/** @type {any[]} */ l) => l.reduce((s, b) => s + b.left_cents, 0);
+  const late = unpaid.filter((b) => b.status === 'overdue');
+  const soon = unpaid.filter((b) => b.status !== 'overdue' && b.due_date && b.due_date <= week);
+  return {
+    today,
+    bills: [...unpaid, ...bills.filter((b) => b.left_cents === 0)],
+    totals: { owed: sum(unpaid), open: unpaid.length, late: sum(late), lateCount: late.length, week: sum(soon), weekCount: soon.length }
+  };
+}
+
+/** @param {number} id */
+async function getBill(id) {
+  const b = await one(BILL_SELECT + ` where b.id=$1`, [id]);
+  if (!b) throw new HttpError(404, 'Bill not found');
+  return mapBill(b, nyDay(Date.now()));
+}
+
+async function billsGet(/** @type {any} */ b) {
+  const bill = await getBill(intId(b.id));
+  const payments = await q(`select id, date, amount_cents, method, note, kind from entries where bill_id=$1 order by date, id`, [bill.id]);
+  return { bill, payments };
+}
+
+async function billsSave(/** @type {any} */ b) {
+  const vendor = str(b.vendor, 120);
+  if (!vendor) throw new HttpError(400, 'Who is the bill from?');
+  const billDate = day(b.bill_date, 'Bill date');
+  const due = b.due_date ? day(b.due_date, 'Due date') : null;
+  if (due && due < billDate) throw new HttpError(400, 'Due date is before the bill date');
+  const f = [vendor, str(b.number, 60) || null, billDate, due, cents(b.amount_cents), str(b.category, 60) || 'Other',
+    b.client_id ? intId(b.client_id) : null, str(b.note, 1000), b.project_id ? intId(b.project_id) : null];
+  if (b.id) {
+    const old = await getBill(intId(b.id));
+    if (f[4] < old.paid_cents) throw new HttpError(400, `You already paid ${money(old.paid_cents)} on this bill. The amount can't be less than that.`);
+    await q(`update bills set vendor=$1, number=$2, bill_date=$3, due_date=$4, amount_cents=$5, category=$6, client_id=$7, note=$8, project_id=$9, updated_at=now() where id=$10`, [...f, old.id]);
+    return { id: old.id };
+  }
+  const r = await one(`insert into bills(vendor, number, bill_date, due_date, amount_cents, category, client_id, note, project_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, f);
+  return { id: r.id };
+}
+
+async function billsDelete(/** @type {any} */ b) {
+  // payments already made stay in the books as expenses (the money really went out)
+  await q(`delete from bills where id=$1`, [intId(b.id)]);
+  return { ok: true };
+}
+
+async function billsPay(/** @type {any} */ b) {
+  const bill = await getBill(intId(b.id));
+  if (!bill.left_cents) throw new HttpError(400, 'This bill is already paid');
+  const amt = cents(b.amount_cents);
+  if (amt > bill.left_cents) throw new HttpError(400, `Only ${money(bill.left_cents)} is left to pay on this bill`);
+  const note = str(b.note, 1000) || ('Bill' + (bill.number ? ' #' + bill.number : '') + (amt < bill.left_cents ? ' (part payment)' : ''));
+  await q(`insert into entries(kind, date, amount_cents, category, party, method, client_id, note, bill_id, project_id) values ('expense',$1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [day(b.date), amt, bill.category, bill.vendor, str(b.method, 40), bill.client_id, note, bill.id, bill.project_id]);
+  return { bill: await getBill(bill.id) };
 }
 
 // ---------- reports ----------
@@ -620,8 +700,10 @@ async function report(/** @type {any} */ b) {
   rows.sort((a, b2) => (a.date < b2.date ? -1 : a.date > b2.date ? 1 : 0));
   const list = (/** @type {Record<string,number>} */ o) => Object.entries(o).map(([category, c]) => ({ category, cents: c })).sort((a, b2) => b2.cents - a.cents);
   const incomeTotal = sm.net + inc;
+  const owed = await one(`select coalesce(sum(greatest(b.amount_cents - coalesce((select sum(e.amount_cents) from entries e where e.bill_id=b.id and e.kind='expense'),0),0)),0)::bigint as n, count(*)::int as c from bills b`);
   return {
     from, to,
+    bills: { owed: owed?.n || 0 },
     stripe: { gross: sm.gross, fees: sm.fees, refunds: sm.refunds, other: sm.other, net: sm.net, count: sm.count },
     income: { total: inc, byCategory: list(incCat) },
     expenses: { total: exp, byCategory: list(expCat) },
@@ -656,6 +738,8 @@ async function dashboard() {
       };
     })() : Promise.resolve({ open: { count: 0, total: 0, overdue: 0, list: [] }, recent: [] })
   ]);
+  const bl = await billsList();
+  out.bills = { owed: bl.totals.owed, late: bl.totals.lateCount, list: bl.bills.filter((x) => x.left_cents > 0).slice(0, 5) };
   out.month = { income: month.totals.income, expenses: month.totals.expenses, profit: month.totals.profit, stripe_fees: month.stripe.fees };
   Object.assign(out, extra, await notificationsList());
   return out;
@@ -756,5 +840,11 @@ export const OPS = {
   'entries.list': entriesList,
   'entries.save': entriesSave,
   'entries.delete': entriesDelete,
-  'report': report
+  'bills.list': billsList,
+  'bills.get': billsGet,
+  'bills.save': billsSave,
+  'bills.delete': billsDelete,
+  'bills.pay': billsPay,
+  'report': report,
+  ...PROJECT_OPS
 };

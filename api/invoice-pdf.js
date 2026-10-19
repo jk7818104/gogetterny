@@ -1,11 +1,23 @@
 // @ts-check
 // The invoice / receipt PDF. Opens for you in the admin, or for the client through the link in their email.
 import { send } from './_lib/http.js';
-import { isAuthed } from './_lib/auth.js';
+import { session } from './_lib/auth.js';
+import { memberFor, hasSection } from './_lib/team.js';
 import { dbUrl } from './_lib/db.js';
 import { stripeKey } from './_lib/stripe.js';
 import { getSettings } from './_lib/settings.js';
 import { loadInvoice, invoicePdf, pdfName, pdfTokenOk } from './_lib/pdf.js';
+
+/** The owner, or a team member who may see invoices. @param {import('http').IncomingMessage} req */
+async function canOpen(req) {
+  const s = session(req);
+  if (!s) return false;
+  if (s.owner) return true;
+  try {
+    const m = await memberFor(/** @type {any} */ (s), await getSettings());
+    return hasSection(m.perms, 'invoices', 'view');
+  } catch (e) { return false; }
+}
 
 /** @param {import('http').IncomingMessage} req @param {import('http').ServerResponse} res */
 export default async function handler(req, res) {
@@ -16,7 +28,7 @@ export default async function handler(req, res) {
     const id = u.searchParams.get('id') || '';
     const t = u.searchParams.get('t') || '';
     if (!/^in_[A-Za-z0-9]{6,80}$/.test(id)) return send(res, 404, { error: 'Not found' });
-    if (!isAuthed(req) && !(await pdfTokenOk(id, t))) return send(res, 404, { error: 'Not found' });
+    if (!(await canOpen(req)) && !(await pdfTokenOk(id, t))) return send(res, 404, { error: 'Not found' });
     const data = await loadInvoice(id);
     const bytes = await invoicePdf(data, await getSettings());
     res.statusCode = 200;
