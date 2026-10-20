@@ -1,37 +1,16 @@
 // @ts-check
 // One endpoint for the admin screen: POST /api/admin { op, ...args }
 import { readJson, send, clientIp, HttpError } from './_lib/http.js';
-import { checkPassword, session, newSessionCookie, clearSessionCookie, verifyPassword } from './_lib/auth.js';
-import { dbUrl, recentHits, addHit, clearHits, one } from './_lib/db.js';
+import { dbUrl, recentHits, addHit, clearHits } from './_lib/db.js';
 import { stripeKey, testMode, stripeMessage } from './_lib/stripe.js';
-import { getSettings } from './_lib/settings.js';
-import { allowed, memberFor, meFor, hasSection } from './_lib/team.js';
-import { OPS } from './_lib/ops.js';
+import { allowed, meFor, hasSection } from './_lib/team.js';
+import { signIn, contextFor } from './_lib/session.js';
+import { clearSessionCookie } from './_lib/auth.js';
+import { audit, auditLogin } from './_lib/audit.js';
+import { OPS as BASE_OPS } from './_lib/ops.js';
+import { SUMMARY_OPS } from './_lib/summary.js';
 
-/** Who is signing in: the owner (password only) or a team member (email + password). @param {any} body @param {string} ip */
-async function signIn(body, ip) {
-  const em = String(body.email || '').trim().toLowerCase();
-  if (!em) {
-    if (!checkPassword(body.password)) return null;
-    return newSessionCookie();
-  }
-  const settings = await getSettings();
-  if (!settings.team_login) return null;
-  const w = await one(`select id, pass_hash, pass_ver, active, login from workers where lower(email)=$1`, [em.slice(0, 200)]);
-  if (!w || !w.active || !w.login || !verifyPassword(String(body.password || ''), w.pass_hash)) return null;
-  return newSessionCookie({ w: w.id, v: w.pass_ver });
-}
-
-/** The signed-in person for this request, with the settings, or null. @param {any} req */
-async function contextFor(req) {
-  const s = session(req);
-  if (!s) return null;
-  const settings = await getSettings();
-  if (s.owner) return { owner: true, settings };
-  try {
-    return { ...(await memberFor(/** @type {any} */ (s), settings)), settings };
-  } catch (e) { return null; }
-}
+const OPS = { ...BASE_OPS, ...SUMMARY_OPS };
 
 /** @param {import('http').IncomingMessage & {body?: any}} req @param {import('http').ServerResponse} res */
 export default async function handler(req, res) {
@@ -57,13 +36,14 @@ export default async function handler(req, res) {
       if (!setup.database) throw new HttpError(503, 'Connect a database in Vercel first.');
       const ip = clientIp(req);
       if (await recentHits('login', ip, 15) >= 8) throw new HttpError(429, 'Too many tries. Wait 15 minutes.');
-      const cookie = await signIn(body, ip);
-      if (!cookie) {
+      const who = await signIn(body);
+      if (!who) {
         await addHit('login', ip);
         throw new HttpError(401, body.email ? 'Wrong email or password' : 'Wrong password');
       }
       await clearHits('login', ip);
-      return send(res, 200, { ok: true }, { 'Set-Cookie': cookie });
+      await auditLogin(who.who, who.worker);
+      return send(res, 200, { ok: true }, { 'Set-Cookie': who.cookie });
     }
     if (op === 'logout') {
       return send(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie() });
@@ -76,6 +56,7 @@ export default async function handler(req, res) {
     if (!fn) throw new HttpError(404, 'Unknown action');
     if (!allowed(ctx, op, ctx.settings)) throw new HttpError(403, 'You don\'t have access to this');
     const data = await fn(body, req, ctx);
+    await audit(ctx, op, body, data);
     if (op === 'clients.get' && !ctx.owner) {
       // a team member sees a client's money only for the parts they have access to
       const p = /** @type {any} */ (ctx).perms;

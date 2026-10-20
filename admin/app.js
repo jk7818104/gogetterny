@@ -32,7 +32,13 @@
     team: I('<circle cx="12" cy="7.5" r="3.2"/><path d="M5.5 20c.5-3.6 3.2-5.6 6.5-5.6s6 2 6.5 5.6"/><circle cx="4.8" cy="10" r="2.2"/><circle cx="19.2" cy="10" r="2.2"/>'),
     clock: I('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
     more: I('<circle cx="5.5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18.5" cy="12" r="1.4"/>'),
-    task: I('<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M8 12.5l3 3 5-6"/>')
+    task: I('<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M8 12.5l3 3 5-6"/>'),
+    trash: I('<path d="M4 7h16M9 7V4.5h6V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>'),
+    history: I('<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3 4v4h4M12 8v4.5l3 2"/>'),
+    spark: I('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>'),
+    upload: I('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>'),
+    clip: I('<path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15 7"/>'),
+    bank: I('<path d="M3 9l9-5 9 5M5 9v9M9.5 9v9M14.5 9v9M19 9v9M3 20h18"/>')
   };
 
   // ---------------------------------------------------------------- html helpers (everything is escaped unless wrapped in raw)
@@ -64,10 +70,21 @@
   const pill = (s, label) => html`<span class="pill p-${s}">${label || String(s).replace(/_/g, ' ')}</span>`;
 
   let toastTimer = 0;
-  function toast(msg, bad) {
+  // when the Trash is off, deleting is final: ask first
+  const sure = (msg) => on('f_trash') || confirm(msg + ' This can\'t be undone.');
+  const undoNote = () => (on('f_trash') ? ' You can undo it.' : ' This can\'t be undone.');
+  // a short note at the bottom; after a delete it carries an Undo button
+  function toast(msg, bad, undo) {
     const t = $('#toast');
-    t.textContent = msg; t.className = 'toast on' + (bad ? ' bad' : '');
-    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = 'toast' + (bad ? ' bad' : ''); }, bad ? 5200 : 3000);
+    t.textContent = msg;
+    const ids = [].concat(undo || []).filter(Boolean);
+    if (ids.length) {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'undo'; b.textContent = 'Undo'; b.dataset.act = 'undo'; b.dataset.ids = JSON.stringify(ids);
+      t.appendChild(b);
+    }
+    t.className = 'toast on' + (bad ? ' bad' : '');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.className = 'toast' + (bad ? ' bad' : ''); }, ids.length ? 9000 : bad ? 5200 : 3000);
   }
 
   async function copy(text) {
@@ -93,7 +110,7 @@
   }
 
   // ---------------------------------------------------------------- server
-  const state = { status: null, me: null, clients: null, projects: null, team: null, inv: {}, ch: {}, plans: {}, entries: {}, bills: {}, tasks: {}, logs: {}, workers: {} };
+  const state = { pick: { kind: null, ids: new Set() }, status: null, me: null, clients: null, projects: null, team: null, inv: {}, ch: {}, plans: {}, entries: {}, bills: {}, tasks: {}, logs: {}, workers: {} };
   async function api(op, args = {}) {
     let r, d;
     try {
@@ -205,10 +222,11 @@
   let routeId = 0;
   async function route() {
     const id = ++routeId;
+    if (state.pick && state.pick.kind) { state.pick = { kind: null, ids: new Set() }; const bb = $('.bulkbar'); if (bb) bb.remove(); }
     const h = location.hash.replace(/^#\/?/, '') || 'home';
     const [name, arg] = h.split('/');
     const shown = navItems().map((n) => n[0]);
-    const blocked = (NAV_ALL.some((n) => n[0] === name) && !shown.includes(name)) || (name === 'settings' && member());
+    const blocked = (NAV_ALL.some((n) => n[0] === name) && !shown.includes(name)) || (['settings', 'trash', 'log'].includes(name) && member()) || (name === 'trash' && !on('f_trash')) || (name === 'log' && !on('f_log'));
     const key = VIEWS[name] && !blocked ? name : 'home';
     $$('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === key));
     const inMore = !$$('.tabs [data-nav]').some((a) => a.dataset.nav === key);
@@ -343,6 +361,8 @@
         ${kpi('Profit in ' + month, money(d.month.profit), '', d.month.profit >= 0 ? 'pos' : 'neg')}
         ${kpi('Waiting to be paid', money(d.open.total), `${d.open.count} open invoice${d.open.count === 1 ? '' : 's'}${d.open.overdue ? ` · ${d.open.overdue} late` : ''}`, d.open.overdue ? 'neg' : '')}
       </div>
+      ${!on('f_todo') ? '' : d.todo && d.todo.length ? html`<h2 class="sec">To do <span class="muted">${d.todo.length} thing${d.todo.length === 1 ? '' : 's'}</span></h2><div class="panel rows todo">${d.todo.map(todoRow)}</div>`
+        : html`<div class="panel pad allclear" style="margin-top:14px">${raw(ICON.ok)}<span>Nothing waiting on you. No late invoices, no bills due, nobody owed.</span></div>`}
       ${(() => {
         const q = [html`<button type="button" data-act="new-invoice">${raw(ICON.invoice)}New invoice</button>`];
         if (on('f_cards')) q.push(html`<button type="button" data-act="new-charge">${raw(ICON.card)}Charge a card</button>`);
@@ -436,14 +456,16 @@
     const open = d.invoices.filter((i) => i.status === 'open');
     return html`
       <div class="head"><div><h1>Invoices</h1><div class="sub">${money(open.reduce((s, i) => s + i.due, 0))} waiting · ${open.filter((i) => i.overdue).length} late</div></div>
-        <div class="acts"><button class="btn ghost" data-act="export-invoices">${raw(ICON.down)}Excel</button>${can('invoices', 'edit') ? html`<button class="btn" data-act="new-invoice">${raw(ICON.plus)}New invoice</button>` : ''}</div></div>
+        <div class="acts">${on('f_bulk') ? html`<button class="btn ghost" data-act="pick-start" data-kind="invoices">Select</button>` : ''}<button class="btn ghost" data-act="export-invoices">${raw(ICON.down)}Excel</button>${can('invoices', 'edit') ? html`<button class="btn" data-act="new-invoice">${raw(ICON.plus)}New invoice</button>` : ''}</div></div>
       <div class="chips" id="ichips">${[['', 'All'], ['open', 'Waiting'], ['overdue', 'Late'], ['paid', 'Paid'], ['draft', 'Drafts'], ['void', 'Void']].map(([v, l]) => html`<button type="button" data-if="${v}" class="${invFilter === v ? 'on' : ''}">${l}</button>`)}</div>
       <div class="panel rows" id="ilist"></div>`;
   };
+  const invShown = () => (state.invList || []).filter((i) => !invFilter || (invFilter === 'overdue' ? i.overdue : i.status === invFilter));
   function drawInvoices() {
     const box = $('#ilist'); if (!box) return;
-    const list = (state.invList || []).filter((i) => !invFilter || (invFilter === 'overdue' ? i.overdue : i.status === invFilter));
-    box.innerHTML = (list.length ? html`${list.map((i) => invoiceRow(i, { acts: true }))}` : empty('No invoices here.')).s;
+    const list = invShown();
+    const picking = state.pick.kind === 'invoices';
+    box.innerHTML = (list.length ? html`${list.map((i) => pickWrap('invoices', i.id, invoiceRow(i, { acts: !picking })))}` : empty('No invoices here.')).s;
   }
 
   VIEWS.payments = async () => {
@@ -493,7 +515,7 @@
     state.entries[e.id] = e;
     const inc = e.kind === 'income';
     return html`<div class="row click ${inc ? 'posi' : 'neg'}" data-act="edit-entry" data-id="${e.id}" tabindex="0">
-      <div class="main"><b>${e.party || e.client_name || e.category}</b><span>${[fmtDate(e.date), e.category, e.project_name, e.method, e.note].filter(Boolean).join(' · ')}</span></div>
+      <div class="main"><b>${e.party || e.client_name || e.category}${e.files ? raw(`<i class="clip">${ICON.clip}</i>`) : ''}</b><span>${[fmtDate(e.date), e.category, e.project_name, e.method, e.note].filter(Boolean).join(' · ')}</span></div>
       ${pill(inc ? 'paid' : 'overdue', inc ? 'income' : 'expense')}
       <div class="amt">${inc ? '' : '−'}${money(e.amount_cents)}</div></div>`;
   }
@@ -505,8 +527,8 @@
     const exp = d.entries.filter((e) => e.kind === 'expense').reduce((s, e) => s + e.amount_cents, 0);
     return html`
       <div class="head"><div><h1>Books</h1><div class="sub">Cash, checks, Zelle and every expense. Card payments through Stripe are counted automatically in Reports.</div></div>
-        <div class="acts"><button class="btn ghost" data-act="export-books">${raw(ICON.down)}Excel</button>
-          ${can('books', 'edit') ? html`<button class="btn ghost" data-act="new-entry" data-kind="income">${raw(ICON.plus)}Income</button>
+        <div class="acts">${on('f_bulk') ? html`<button class="btn ghost" data-act="pick-start" data-kind="books">Select</button>` : ''}<button class="btn ghost" data-act="export-books">${raw(ICON.down)}Excel</button>
+          ${can('books', 'edit') ? html`${on('f_uploads') ? html`<button class="btn ghost" data-act="upload" data-hint="">${raw(ICON.upload)}Upload</button>` : ''}${on('f_import') ? html`<button class="btn ghost" data-act="import-bank">${raw(ICON.bank)}Bank statement</button>` : ''}<button class="btn ghost" data-act="new-entry" data-kind="income">${raw(ICON.plus)}Income</button>
           <button class="btn" data-act="new-entry" data-kind="expense">${raw(ICON.plus)}Expense</button>` : ''}</div></div>
       ${periodBar(books, 'bk')}
       <div class="kpis three">
@@ -514,13 +536,15 @@
         ${kpi('Expenses', money(exp), d.entries.filter((e) => e.kind === 'expense').length + ' entries', 'neg')}
         ${kpi('Difference', money(inc - exp), 'without card payments')}
       </div>
+      ${can('books', 'edit') && (on('f_uploads') || on('f_import')) ? html`<div class="dropzone" data-drop="">${raw(ICON.upload)}<span>${on('f_uploads') ? 'Drop receipts, bills or a bank statement here (PDF, Word, Excel, CSV or photos).' : 'Drop a bank statement here (CSV or Excel).'} ${on('f_import') ? html`<button type="button" class="linkbtn" data-act="imports-list">Past imports</button>` : ''}</span></div>` : ''}
       <div class="chips" style="margin-top:16px" id="kchips">${[['', 'All'], ['income', 'Income'], ['expense', 'Expenses']].map(([v, l]) => html`<button type="button" data-kf="${v}" class="${books.kind === v ? 'on' : ''}">${l}</button>`)}</div>
       <div class="panel rows" id="klist"></div>`;
   };
+  const booksShown = () => (state.entryList || []).filter((e) => !books.kind || e.kind === books.kind);
   function drawBooks() {
     const box = $('#klist'); if (!box) return;
-    const list = (state.entryList || []).filter((e) => !books.kind || e.kind === books.kind);
-    box.innerHTML = (list.length ? html`${list.map(entryRow)}` : empty('Nothing recorded for these dates.')).s;
+    const list = booksShown();
+    box.innerHTML = (list.length ? html`${list.map((e) => pickWrap('books', e.id, entryRow(e)))}` : empty('Nothing recorded for these dates.')).s;
   }
 
   VIEWS.reports = async () => {
@@ -531,6 +555,7 @@
     return html`
       <div class="head"><div><h1>Reports</h1><div class="sub">Profit and loss, ${fmtDate(d.from)} – ${fmtDate(d.to)}</div></div>
         <div class="acts downloads">
+          ${on('f_pack') ? html`<button class="btn ghost" data-act="accountant-pack">${raw(ICON.books)}Accountant pack</button>` : ''}
           <button class="btn ghost" data-act="export-pl">${raw(ICON.down)}Profit &amp; loss</button>
           <button class="btn ghost" data-act="export-tx">${raw(ICON.down)}All transactions</button>
           <button class="btn" data-act="print">${raw(ICON.down)}PDF</button></div></div>
@@ -562,109 +587,158 @@
       <p class="hint" style="margin-top:14px">For your accountant: card income is shown after Stripe fees. This is a simple summary, not tax advice.</p>`;
   };
 
-  VIEWS.settings = async () => {
+  // ---------------------------------------------------------------- settings: search, topics, saves by itself
+  const SET_TOPICS = () => [
+    ['features', 'Features', 'Turn parts of the admin on or off', ICON.gear],
+    ['clients', 'Emails to clients', 'Invoices, receipts, auto-reply', ICON.mail],
+    ['alerts', 'Alerts to you', 'Payments, bills, weekly summary', ICON.bell],
+    ['invoices', 'New invoices', 'What a new invoice starts with', ICON.invoice],
+    ['business', 'Business details', 'Name, address and terms on invoices', ICON.books],
+    ['team', 'Team sign-in', 'Let team members sign in', ICON.team],
+    ['connections', 'Stripe and email', 'Payment alerts, sending your own emails', ICON.card],
+    ['claude', 'Claude connector', 'Use your own Claude app with this admin', ICON.spark],
+    ...(on('f_trash') ? [['trash', 'Trash', 'Bring back things you deleted', ICON.trash, '#/trash']] : []),
+    ...(on('f_log') ? [['log', 'Activity log', 'Who changed what, and when', ICON.history, '#/log']] : []),
+    ['look', 'Look and sign out', 'Day or night mode', ICON.sun]
+  ];
+  VIEWS.settings = async (arg) => {
     const d = await api('settings.get');
     state.cfg = d;
     const s = d.settings, em = d.email.ready;
-    const sw = (key, title, sub, needMail) => html`<label class="setrow ${needMail && !em ? 'off' : ''}"><div><b>${title}</b>${sub ? html`<span>${sub}</span>` : ''}</div>
+    const q = (...t) => t.filter(Boolean).join(' ').toLowerCase();
+    const sw = (key, title, sub, needMail) => html`<label class="setrow ${needMail && !em ? 'off' : ''}" data-q="${q(title, sub, key)}"><div><b>${title}</b>${sub ? html`<span>${sub}</span>` : ''}</div>
       <span class="switch"><input type="checkbox" data-set="${key}" ${raw(s[key] ? 'checked' : '')} ${raw(needMail && !em ? 'disabled' : '')}><i></i></span></label>`;
-    const field = (key, title, type = 'text') => html`<label class="setrow"><div><b>${title}</b></div><input data-set="${key}" type="${type}" value="${s[key]}" maxlength="200"></label>`;
+    const field = (key, title, type = 'text') => html`<label class="setrow" data-q="${q(title, key)}"><div><b>${title}</b></div><input data-set="${key}" type="${type}" value="${s[key]}" maxlength="200"></label>`;
+    const block = (words, body) => html`<div class="setrow col" data-q="${q(words)}">${body}</div>`;
+    const sec = (k, title, rows, after) => html`<section class="setsec hide" data-topic="${k}" data-q="${q(title)}"><h2 class="sec">${title}</h2><div class="panel">${rows}</div>${after || ''}</section>`;
+    const mb = (n) => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+    const sections = [
+      sec('features', 'Features', [
+        sw('f_payments', 'Payments page', 'List of card payments, refunds'),
+        sw('f_cards', 'Cards on file', '"Save card" links and charging a saved card'),
+        sw('f_plans', 'Payment plans', 'Weekly or monthly payments'),
+        sw('f_books', 'Books', 'Cash, checks, Zelle and expenses, uploads and bank import'),
+        sw('f_bills', 'Bills', 'What you owe suppliers, due dates, paying in parts'),
+        sw('f_projects', 'Projects', 'Projects with tasks, status, updates and money in and out'),
+        sw('f_time', 'Hours', 'Log hours on projects; hourly workers are paid by them'),
+        sw('f_team', 'Team', 'Workers, their pay, and what they may see'),
+        sw('f_reports', 'Reports', 'Profit and loss, Excel downloads'),
+        sw('f_todo', 'To do on the home page', 'Late invoices, bills due, team pay owed, late tasks, new leads'),
+        sw('f_trash', 'Trash and Undo', 'Off = deleting is final (you are asked first)'),
+        sw('f_log', 'Activity log', 'Off = changes are no longer recorded and the log is hidden'),
+        sw('f_bulk', 'Select several at once', 'The "Select" button on Invoices, Bills and Books'),
+        sw('f_uploads', 'Upload files', 'PDF, Word, Excel and photos as expenses, income or bills, and files attached to them'),
+        sw('f_import', 'Bank statement import', 'Read a CSV or Excel statement into Books'),
+        sw('f_pack', 'Accountant pack', 'Year-end Excel file under Reports'),
+        sw('f_discounts', 'Discounts on invoices', '% or $ off'),
+        sw('f_fields', 'Project and PO number on invoices', 'Printed on the invoice'),
+        sw('f_cc', 'CC on invoice emails', ''),
+        sw('f_ach', 'Bank payments (ACH)', 'Turn on ACH Direct Debit in Stripe → Settings → Payment methods first'),
+        sw('f_reminders', 'Invoice reminders', 'Daily check; emails go out 3 days before, on the due date, and 7 days late'),
+        sw('f_leads', 'Website messages become leads', 'The contact form on gogetterinc.com adds the person here'),
+        sw('f_notifications', 'Notifications bell', '')
+      ], html`<p class="hint">Files stored: ${d.files.count} (${mb(d.files.bytes)}). They are kept in your database.</p>`),
+      sec('clients', 'Emails to clients', [
+        sw('invoices_from_us', 'Send invoices from GO GETTER', 'Your own design with a Pay button and the PDF attached, instead of Stripe\'s email', true),
+        sw('paid_thankyou', 'Receipt after they pay', 'Thank-you email with the PAID receipt PDF. Turn off Stripe\'s own receipts so they don\'t get two.', true),
+        sw('lead_autoreply', 'Auto-reply to website messages', '"We got your message, we reply within 24 hours."', true)
+      ]),
+      sec('alerts', 'Alerts to you', [
+        field('alert_email', 'Send alerts to', 'email'),
+        sw('weekly_summary', 'Weekly summary', 'Every Monday morning: last week\'s money, what is late, what to pay this week', true),
+        sw('alert_paid', 'A client paid online', '', true),
+        sw('alert_failed', 'A payment failed or a dispute opened', '', true),
+        sw('alert_card', 'A client saved a card', '', true),
+        sw('alert_lead', 'New website message', 'Off by default: the website form already emails you', true),
+        sw('alert_bills', 'A supplier bill is due soon or late', '3 days before the due date, and once when it is late', true)
+      ], html`<div class="saverow" style="margin-top:12px">${em ? html`<button class="btn ghost sm" data-act="summary-send">Send me this week's summary now</button>` : ''}</div><p class="hint">The bell in the admin always shows alerts, even without email.</p>`),
+      sec('invoices', 'New invoices start with', [
+        sw('ach_default', 'Bank payment (ACH) turned on', ''),
+        sw('remind_default', 'Reminders turned on', '', true)
+      ]),
+      sec('business', 'Business details on invoices and emails', [
+        field('biz_name', 'Business name'), field('biz_address', 'Address'), field('biz_phone', 'Phone', 'tel'),
+        field('biz_email', 'Email (clients reply here)', 'email'), field('invoice_thanks', 'Thank-you line'),
+        html`<label class="setrow col" data-q="terms printed on invoices"><div><b>Terms printed on invoices</b><span>Shown at the bottom of every invoice PDF.</span></div><textarea data-set="invoice_terms" maxlength="1000">${s.invoice_terms}</textarea></label>`
+      ], html`<p class="hint">Your full <a href="/terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a> are on the website and linked from every email.</p>`),
+      sec('team', 'Team sign-in', [
+        sw('team_login', 'Let team members sign in', 'Each person signs in with their own email and password and sees only what you allow. Set it per person under Team.')
+      ], html`<p class="hint">Off = only you can sign in. Turning it off signs everyone else out.</p>`),
+      sec('connections', 'Stripe and email', [
+        block('stripe payment alerts webhook', !d.stripe ? html`<p class="muted">Stripe is not connected. Add STRIPE_SECRET_KEY in Vercel.</p>` : d.alerts.connected
+          ? html`<div class="status"><span class="ok">${raw(ICON.ok)}</span><div><b>Payment alerts are on.</b> Stripe tells the admin right away when a client pays, a payment fails, a card is saved or a dispute opens.</div></div>`
+          : html`<div class="status"><div><b>Payment alerts are off.</b> Turn this on so payments show up by themselves, receipts go out, and you get notified.</div><button class="btn" data-act="alerts-connect">Turn on</button></div>`),
+        block('email resend sending connection test', em
+          ? html`<div class="status"><span class="ok">${raw(ICON.ok)}</span><div><b>Email is connected.</b> Emails go out from ${d.email.from}.</div><button class="btn ghost sm" data-act="email-test">Send me a test</button></div>`
+          : html`<div><b>Email is not connected.</b> <span>Add RESEND_API_KEY in Vercel (from resend.com, with gogetterinc.com verified there). Until then Stripe sends the invoice emails.</span></div>`)
+      ]),
+      sec('claude', 'Claude connector', [
+        sw('f_ai', 'Allow the Claude connector', 'Off = the connector stops working, even with a key'),
+        block('claude connector key mcp ai assistant', d.connector.on
+          ? html`<div class="status"><span class="ok">${raw(ICON.ok)}</span><div><b>Key made ${fmtDate(d.connector.created)}</b> <span>ending in …${d.connector.last4}</span></div>
+            <button class="btn ghost sm" data-act="connector-key">Make a new key</button><button class="btn danger sm" data-act="connector-off">Turn off</button></div>`
+          : html`<div class="status"><div><b>Not set up.</b> <span>Make a key, then add the connector in your Claude app.</span></div><button class="btn" data-act="connector-key">Make a key</button></div>`)
+      ], html`<p class="hint">With the connector, your own Claude app (your plan, no extra cost) can look things up here and, after you approve, add bills, expenses, invoices, tasks and hours. Give it a PDF of a bill and say "add this". Everything it does is in the Activity log.</p>`),
+      sec('look', 'Look and sign out', [
+        block('day night mode theme sign out logout', html`<div class="saverow" style="margin:0"><button class="btn ghost" type="button" data-act="theme" data-label="1">${raw(isLight() ? ICON.moon : ICON.sun)}<span>${isLight() ? 'Night mode' : 'Day mode'}</span></button>
+          <button class="btn ghost" type="button" data-act="logout">${raw(ICON.out)}<span>Sign out</span></button></div>`)
+      ])
+    ];
+    const topic = SET_TOPICS().find((x) => x[0] === arg && !x[4]);
     return html`
-      <div class="head"><div><h1>Settings</h1><div class="sub">Switch features on or off, automatic emails, alerts and how invoices look.</div></div>
-        <div class="acts"><button class="btn" data-act="settings-save">Save settings</button></div></div>
-
-      <h2 class="sec">Features <span class="muted">Off = hidden from the admin</span></h2>
-      <div class="panel">
-        ${sw('f_payments', 'Payments page', 'List of card payments, refunds')}
-        ${sw('f_cards', 'Cards on file', '"Save card" links and charging a saved card')}
-        ${sw('f_plans', 'Payment plans', 'Weekly or monthly payments')}
-        ${sw('f_books', 'Books', 'Cash, checks, Zelle and expenses')}
-        ${sw('f_bills', 'Bills', 'What you owe suppliers, due dates, paying in parts')}
-        ${sw('f_projects', 'Projects', 'Projects with tasks, status, updates and costs')}
-        ${sw('f_time', 'Hours', 'Log hours on projects; hourly workers are paid by them')}
-        ${sw('f_team', 'Team', 'Workers, their pay, and what they may see')}
-        ${sw('f_reports', 'Reports', 'Profit and loss, Excel downloads')}
-        ${sw('f_discounts', 'Discounts on invoices', '% or $ off')}
-        ${sw('f_fields', 'Project and PO number on invoices', '')}
-        ${sw('f_cc', 'CC on invoice emails', '')}
-        ${sw('f_ach', 'Bank payments (ACH)', 'Turn on ACH Direct Debit in Stripe → Settings → Payment methods first')}
-        ${sw('f_reminders', 'Invoice reminders', 'Daily check; emails go out 3 days before, on the due date, and 7 days late')}
-        ${sw('f_leads', 'Website messages become leads', 'The contact form on gogetterinc.com adds the person here')}
-        ${sw('f_notifications', 'Notifications bell', '')}
-      </div>
-
-      <h2 class="sec">Payment alerts</h2>
-      <div class="panel pad">${!d.stripe ? html`<p class="muted">Connect Stripe first.</p>` : d.alerts.connected
-        ? html`<div class="status"><span class="ok">${raw(ICON.ok)}</span><div><b>On.</b> Stripe tells the admin right away when a client pays, a payment fails, a card is saved or a dispute opens.</div></div>`
-        : html`<div class="status"><div><b>Off.</b> Turn this on so payments show up by themselves, receipts go out, and you get notified.</div><button class="btn" data-act="alerts-connect">Turn on</button></div>`}</div>
-
-      <h2 class="sec">Email</h2>
-      <div class="panel pad">${em
-        ? html`<div class="status"><span class="ok">${raw(ICON.ok)}</span><div><b>Connected.</b> Emails go out from ${d.email.from}.</div><button class="btn ghost" data-act="email-test">Send me a test</button></div>`
-        : html`<b>Not connected yet.</b> Until then, Stripe sends the invoice emails. To send your own branded emails with the PDF:
-          <ol class="steps">
-            <li>Make a free account at <b>resend.com</b> (up to 3,000 emails a month free).</li>
-            <li><b>Domains → Add domain → gogetterinc.com</b>. Add the DNS records it shows where your domain's DNS is (if it's on Vercel: Vercel → Domains → gogetterinc.com). Wait until it says Verified.</li>
-            <li><b>API Keys → Create API key</b>, copy it.</li>
-            <li>Vercel → gogetterny → <b>Settings → Environment Variables</b> → add <code>RESEND_API_KEY</code> → Save → Redeploy.</li>
-          </ol>`}</div>
-
-      <h2 class="sec">Emails to clients</h2>
-      <div class="panel">
-        ${sw('invoices_from_us', 'Send invoices from GO GETTER', 'Your own design with a Pay button and the PDF attached, instead of Stripe\'s email', true)}
-        ${sw('paid_thankyou', 'Receipt after they pay', 'Thank-you email with the PAID receipt PDF. Turn off Stripe\'s own receipts so they don\'t get two.', true)}
-        ${sw('lead_autoreply', 'Auto-reply to website messages', '"We got your message, we reply within 24 hours."', true)}
-      </div>
-
-      <h2 class="sec">Alerts to you</h2>
-      <div class="panel">
-        ${field('alert_email', 'Send alerts to', 'email')}
-        ${sw('alert_paid', 'A client paid online', '', true)}
-        ${sw('alert_failed', 'A payment failed or a dispute opened', '', true)}
-        ${sw('alert_card', 'A client saved a card', '', true)}
-        ${sw('alert_lead', 'New website message', 'Off by default: the website form already emails you', true)}
-        ${sw('alert_bills', 'A supplier bill is due soon or late', '3 days before the due date, and once when it is late', true)}
-      </div>
-
-      <h2 class="sec">Team sign-in</h2>
-      <div class="panel">
-        ${sw('team_login', 'Let team members sign in', 'Each person signs in with their own email and password and sees only what you allow. Set it per person under Team.')}
-      </div>
-      <p class="hint">Off = only you can sign in, even if a person has a password. Turning it off signs everyone else out.</p>
-      <p class="hint">The bell in the admin always shows these, even without email.</p>
-
-      <h2 class="sec">New invoices start with</h2>
-      <div class="panel">
-        ${sw('ach_default', 'Bank payment (ACH) turned on', '')}
-        ${sw('remind_default', 'Reminders turned on', '', true)}
-      </div>
-
-      <h2 class="sec">On your invoices and emails</h2>
-      <div class="panel">
-        ${field('biz_name', 'Business name')}
-        ${field('biz_address', 'Address')}
-        ${field('biz_phone', 'Phone', 'tel')}
-        ${field('biz_email', 'Email (clients reply here)', 'email')}
-        ${field('invoice_thanks', 'Thank-you line')}
-        <label class="setrow col"><div><b>Terms printed on invoices</b><span>Shown at the bottom of every invoice PDF.</span></div><textarea data-set="invoice_terms" maxlength="1000">${s.invoice_terms}</textarea></label>
-      </div>
-      <p class="hint">Your full <a href="/terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="/privacy" target="_blank" rel="noopener">Privacy Policy</a> are on the website and linked from every email.</p>
-
-      <div class="saverow"><button class="btn" data-act="settings-save">Save settings</button>
-        <button class="btn ghost" type="button" data-act="theme" data-label="1">${raw(isLight() ? ICON.moon : ICON.sun)}<span>${isLight() ? 'Night mode' : 'Day mode'}</span></button>
-        <button class="btn ghost" type="button" data-act="logout">${raw(ICON.out)}<span>Sign out</span></button></div>`;
+      <div class="head"><div>${topic ? html`<div class="muted"><a href="#/settings" class="muted">← All settings</a></div>` : ''}<h1>${topic ? topic[1] : 'Settings'}</h1>
+        <div class="sub">${topic ? topic[2] : 'Everything saves by itself as you change it.'}</div></div></div>
+      <div class="search setsearch"><span>${raw(ICON.search)}</span><input id="setq" type="search" placeholder="Search settings, like &quot;reminder&quot; or &quot;email&quot;" autocomplete="off"></div>
+      <div id="setwrap" data-topic="${topic ? topic[0] : ''}">
+        <div class="tiles ${topic ? 'hide' : ''}" id="settiles">${SET_TOPICS().map(([k, t, sub, i, href]) => html`<a class="tile" href="${raw(href || '#/settings/' + k)}">${raw(i)}<div><b>${t}</b><span>${sub}</span></div></a>`)}</div>
+        ${sections}
+        <p class="empty hide" id="setnone">No setting matches. Try another word.</p>
+      </div>`;
   };
-
-  async function saveSettings(btn) {
-    const out = {};
-    $$('#view [data-set]').forEach((el) => { out[el.dataset.set] = el.type === 'checkbox' ? el.checked : el.value; });
-    await busy(btn, async () => {
-      try {
-        state.cfg = await api('settings.save', { settings: out });
-        toast('Settings saved');
-        shell(); route();
-      } catch (err) { toast(err.message, true); }
+  // show the chosen topic, or the tiles, or what matches the search
+  function drawSettings() {
+    const wrap = $('#setwrap'); if (!wrap) return;
+    const term = ($('#setq') ? $('#setq').value : '').trim().toLowerCase();
+    const topic = wrap.dataset.topic;
+    let any = false;
+    $('#settiles').classList.toggle('hide', !!term || !!topic);
+    $$('.setsec', wrap).forEach((sec) => {
+      if (!term) { sec.classList.toggle('hide', sec.dataset.topic !== topic); $$('[data-q]', sec).forEach((r) => r.classList.remove('hide')); return; }
+      const titleHit = sec.dataset.q.includes(term);
+      let hits = 0;
+      $$('.panel > [data-q]', sec).forEach((r) => { const hit = titleHit || r.dataset.q.includes(term); r.classList.toggle('hide', !hit); if (hit) hits++; });
+      sec.classList.toggle('hide', !hits);
+      if (hits) any = true;
     });
+    $('#setnone').classList.toggle('hide', !term || any);
+  }
+  // every switch and field saves on its own
+  async function saveOne(el) {
+    const key = el.dataset.set;
+    const val = el.type === 'checkbox' ? el.checked : el.value;
+    try {
+      state.cfg = await api('settings.save', { settings: { [key]: val } });
+      toast('Saved');
+      if (/^f_|^team_login$/.test(key)) { const q0 = $('#setq') ? $('#setq').value : ''; shell(); await route(); if (q0 && $('#setq')) { $('#setq').value = q0; drawSettings(); } }
+    } catch (err) {
+      toast(err.message, true);
+      if (el.type === 'checkbox') el.checked = !val;
+    }
+  }
+
+  function connectorKeyShow(key) {
+    const url = location.origin + '/api/mcp';
+    const m = modal('Claude connector key', html`<div class="fields">
+      <p class="soft">Copy the key now. It is shown only this once. Making a new key later stops the old one.</p>
+      <div><label>Server URL</label><div class="linkbox"><input readonly value="${url}"><button type="button" class="btn ghost sm" data-copy="${url}">Copy</button></div></div>
+      <div><label>Key</label><div class="linkbox"><input readonly value="${key}"><button type="button" class="btn ghost sm" data-copy="${key}">Copy</button></div></div>
+      <ol class="steps">
+        <li>In your Claude app (claude.ai or the desktop app), open <b>Settings → Connectors</b> and add a <b>custom connector</b>.</li>
+        <li>Name it <b>GO GETTER</b> and paste the Server URL.</li>
+        <li>Add a request header: name <code>Authorization</code>, value <code>Bearer</code> + a space + the key.</li>
+        <li>Save. In a chat, turn the connector on and ask, for example: "What is due this week?"</li>
+      </ol></div>`, html`<button type="button" class="btn" data-close>Done</button>`);
+    m.d.addEventListener('click', (e) => { const b = e.target.closest('[data-copy]'); if (b) copy(b.dataset.copy); });
   }
 
   // ---------------------------------------------------------------- dialogs
@@ -980,6 +1054,7 @@
       <div><label for="e-client">Client (optional)</label><select id="e-client"><option value="">None</option>${(await clientsCache()).map((c) => html`<option value="${c.id}" ${raw(String(c.id) === String(e0.client_id) ? 'selected' : '')}>${c.name}${c.company ? ' · ' + c.company : ''}</option>`)}</select></div>
       ${await projectField(e0.project_id, 'e-project')}
       <div><label for="e-note">Note</label><input id="e-note" maxlength="1000" value="${e0.note || ''}" placeholder="e.g. receipt #, what it was for"></div>
+      ${id ? html`<div><label>Files</label><div id="f-files" class="filesbox"></div></div>` : ''}
     </div>`, html`${id ? html`<button type="button" class="btn danger" id="e-del" style="margin-right:auto">Delete</button>` : ''}<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
     const fillCats = () => {
       const s = $('#e-cat', m.d);
@@ -987,10 +1062,11 @@
       $('#e-party-l', m.d).textContent = k === 'income' ? 'Received from' : 'Paid to';
     };
     fillCats();
+    if (id) filesBox(m, 'entry_id', id);
     $('#e-kind', m.d).addEventListener('click', (ev) => { const b = ev.target.closest('button'); if (!b) return; k = b.dataset.v; $$('#e-kind button', m.d).forEach((x) => x.classList.toggle('on', x === b)); fillCats(); });
     if (id) $('#e-del', m.d).addEventListener('click', async () => {
-      if (!confirm('Delete this entry?')) return;
-      try { await api('entries.delete', { id: Number(id) }); m.close(); toast('Deleted'); refresh(); } catch (err) { m.err(err.message); }
+      if (!sure('Delete this entry?')) return;
+      try { const r = await api('entries.delete', { id: Number(id) }); m.close(); toast('Deleted', false, r.trash_id); refresh(); } catch (err) { m.err(err.message); }
     });
     m.form.addEventListener('submit', async (ev) => {
       ev.preventDefault(); m.err('');
@@ -1116,6 +1192,192 @@
   const payLabel = (type, rate) => type === 'project' ? (rate ? money(rate) + ' for the project' : 'per project') : (rate ? money(rate) + '/hr' : 'hourly');
   const METHODS_PAY = ['Zelle', 'Bank transfer', 'Check', 'Cash', 'Card', 'Other'];
 
+  // ---------------------------------------------------------------- uploads: PDF, Word, Excel, CSV, photos
+  // a photo from the phone is made smaller first, so it stays under 4 MB
+  async function shrinkImage(file) {
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type) || file.size < 1.2e6) return file;
+    try {
+      const img = await createImageBitmap(file);
+      const k = Math.min(1, 2000 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      const blob = await new Promise((res) => c.toBlob(res, 'image/jpeg', 0.82));
+      return blob && blob.size < file.size ? new File([blob], file.name.replace(/\.\w+$/, '') + '.jpg', { type: 'image/jpeg' }) : file;
+    } catch (e) { return file; }
+  }
+  async function sendFile(file) {
+    const f = await shrinkImage(file);
+    if (f.size > 4 * 1024 * 1024) throw new Error(`"${file.name}" is over 4 MB. Make it smaller and try again.`);
+    let r, d;
+    try {
+      r = await fetch('/api/upload', { method: 'POST', credentials: 'same-origin', body: f,
+        headers: { 'X-GG': '1', 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(f.name), 'X-File-Type': f.type || '' } });
+    } catch (e) { throw new Error('No connection. Check your internet and try again.'); }
+    try { d = await r.json(); } catch (e) { d = { error: 'Server error (' + r.status + ')' }; }
+    if (r.status === 401) { gate(); throw new Error('Please sign in'); }
+    if (!r.ok) throw new Error(d.error || 'Upload failed');
+    return d;
+  }
+  function pickFiles(multiple, accept = '.pdf,.docx,.xlsx,.csv,.txt,image/*') {
+    return new Promise((resolve) => {
+      const i = document.createElement('input'); i.type = 'file'; i.multiple = multiple; i.accept = accept;
+      i.addEventListener('change', () => resolve(Array.from(i.files || [])));
+      i.click();
+    });
+  }
+  // upload one or more files, then for each: a bank statement goes to import, anything else to "Save document"
+  async function uploadFiles(files, hint) {
+    for (const file of files) {
+      toast(`Reading ${file.name}…`);
+      let r;
+      try { r = await sendFile(file); } catch (e) { toast(e.message, true); continue; }
+      $('#toast').className = 'toast';
+      if (r.table && hint !== 'doc' && on('f_import')) await importFlow(r);
+      else if (!on('f_uploads')) toast('This is not a bank statement. Uploading documents is switched off in Settings.', true);
+      else await docForm(r, hint);
+    }
+  }
+  const fileLink = (f) => html`<a class="filechip" href="/api/file?id=${f.id}" target="_blank" rel="noopener">${raw(ICON.clip)}<span>${f.name}</span></a>`;
+
+  // the form after an upload: what was read from the file, ready to check and save as an expense, income or a bill
+  function docForm(r, hint) {
+    return new Promise((resolve) => {
+      const g = r.guess || {};
+      let k = hint === 'bill' ? 'bill' : g.kind || (hint === 'income' ? 'income' : 'expense');
+      if (!on('f_bills') && k === 'bill') k = 'expense';
+      const m = modal('Save document', html`<div class="fields">
+        <div class="docfile">${fileLink(r.file)}<span class="muted">${r.read ? 'Filled in from the file. Check it before you save.' : 'Nothing could be read from this file. Fill it in.'}</span></div>
+        ${r.duplicate ? html`<div class="banner" style="margin:0">${r.duplicate}</div>` : ''}
+        <div class="seg inc" id="d-kind"><button type="button" data-v="expense">Expense (paid)</button>${on('f_bills') ? html`<button type="button" data-v="bill">Bill to pay</button>` : ''}<button type="button" data-v="income">Income</button></div>
+        <div class="grid2"><div><label for="d-amt">Amount</label><input id="d-amt" inputmode="decimal" placeholder="0.00" value="${g.amount_cents ? plain(g.amount_cents) : ''}"></div>
+          <div><label for="d-date" id="d-date-l">Date</label><input id="d-date" type="date" value="${g.date || today()}"></div></div>
+        <div class="grid2"><div><label for="d-party" id="d-party-l">Paid to</label><input id="d-party" maxlength="120" value="${g.party || ''}"></div>
+          <div><label for="d-cat">Category</label><select id="d-cat"></select></div></div>
+        <div class="grid2 bill-only"><div><label for="d-num">Their bill / invoice #</label><input id="d-num" maxlength="60" value="${g.number || ''}"></div>
+          <div><label for="d-due">Due date</label><input id="d-due" type="date" value="${g.due_date || ''}"></div></div>
+        <div class="not-bill"><label for="d-method">Paid by</label><select id="d-method">${METHODS.map((x) => html`<option>${x}</option>`)}</select></div>
+        <div id="d-proj"></div>
+        <div><label for="d-note">Note</label><input id="d-note" maxlength="1000" value="${g.number ? (k === 'bill' ? '' : '#' + g.number) : ''}"></div>
+      </div>`, html`<button type="button" class="btn ghost" data-close>Skip</button><button class="btn" type="submit">Save</button>`);
+      m.d.addEventListener('close', () => resolve(null));
+      projectField('', 'd-project').then((h) => { const b = $('#d-proj', m.d); if (b) b.innerHTML = h ? h.s : ''; });
+      const setKind = (v) => {
+        k = v;
+        $$('#d-kind button', m.d).forEach((x) => x.classList.toggle('on', x.dataset.v === v));
+        $$('.bill-only', m.d).forEach((x) => x.classList.toggle('hide', v !== 'bill'));
+        $$('.not-bill', m.d).forEach((x) => x.classList.toggle('hide', v === 'bill'));
+        $('#d-party-l', m.d).textContent = v === 'income' ? 'Received from' : v === 'bill' ? 'Supplier' : 'Paid to';
+        $('#d-date-l', m.d).textContent = v === 'bill' ? 'Bill date' : 'Date';
+        const cats = v === 'income' ? CATS.income : CATS.expense;
+        const want = g.category && cats.includes(g.category) ? g.category : v === 'bill' ? 'Hardware & inventory' : cats[cats.length - 1];
+        $('#d-cat', m.d).innerHTML = html`${cats.map((x) => html`<option ${raw(x === want ? 'selected' : '')}>${x}</option>`)}`.s;
+        $('#d-method', m.d).value = v === 'income' ? 'Zelle' : 'Card';
+      };
+      setKind(k);
+      $('#d-kind', m.d).addEventListener('click', (ev) => { const b = ev.target.closest('button'); if (b) setKind(b.dataset.v); });
+      m.form.addEventListener('submit', async (ev) => {
+        ev.preventDefault(); m.err('');
+        const c = parseMoney($('#d-amt', m.d).value);
+        if (isNaN(c) || c <= 0) return m.err('Enter the amount, like 1250.00');
+        const proj = $('#d-project', m.d) && $('#d-project', m.d).value ? Number($('#d-project', m.d).value) : null;
+        await busy(m.form.querySelector('[type=submit]'), async () => {
+          try {
+            if (k === 'bill') await api('bills.save', { vendor: $('#d-party', m.d).value || 'Supplier', number: $('#d-num', m.d).value, amount_cents: c, category: $('#d-cat', m.d).value,
+              bill_date: $('#d-date', m.d).value, due_date: $('#d-due', m.d).value, project_id: proj, note: $('#d-note', m.d).value, file_id: r.file.id });
+            else await api('entries.save', { kind: k, date: $('#d-date', m.d).value, amount_cents: c, category: $('#d-cat', m.d).value, party: $('#d-party', m.d).value,
+              method: $('#d-method', m.d).value, note: $('#d-note', m.d).value, project_id: proj, file_id: r.file.id });
+            m.close(); toast(k === 'bill' ? 'Bill saved with the file' : 'Saved with the file'); refresh(); resolve(true);
+          } catch (err) { m.err(err.message); }
+        });
+      });
+    });
+  }
+
+  // files on an entry or a bill: open, remove, attach another
+  async function filesBox(m, where, id) {
+    const box = $('#f-files', m.d); if (!box) return;
+    const draw = async () => {
+      const r = await api('files.list', { [where]: Number(id) });
+      const canEdit = (can('books', 'edit') || can('bills', 'edit')) && on('f_uploads');
+      box.innerHTML = html`${r.files.map((f) => html`<div class="filerow">${fileLink(f)}<span class="muted">${Math.max(1, Math.round(f.size / 1024))} KB</span>${canEdit ? html`<button type="button" class="linkbtn" data-file-del="${f.id}">Remove</button>` : ''}</div>`)}
+        ${canEdit ? html`<button type="button" class="linkbtn" data-file-add="1">+ Attach a file</button>` : ''}`.s;
+    };
+    box.addEventListener('click', async (e) => {
+      const del = e.target.closest('[data-file-del]');
+      if (del) { if (!confirm('Remove this file?')) return; await api('files.delete', { id: Number(del.dataset.fileDel) }); return draw(); }
+      if (e.target.closest('[data-file-add]')) {
+        const files = await pickFiles(true);
+        for (const f of files) { try { const r = await sendFile(f); await api('files.attach', { file_id: r.file.id, [where]: Number(id) }); } catch (err) { toast(err.message, true); } }
+        draw();
+      }
+    });
+    try { await draw(); } catch (e) { box.innerHTML = ''; }
+  }
+
+  // ---------------------------------------------------------------- bank statement import
+  const IMPORT_STATUS = { new: ['New', 'open'], bill: ['Pays a bill', 'open'], worker: ['Team pay', 'open'], in_books: ['Already in Books', 'paid'], stripe: ['Stripe payout', 'void'], transfer: ['Transfer', 'void'] };
+  async function importFlow(up, map, flip) {
+    let d;
+    try { d = await api('import.preview', { file_id: up.file.id, map, flip }); } catch (e) { toast(e.message, true); return; }
+    const rows = d.rows;
+    const picked = new Set(rows.filter((x) => ['new', 'bill', 'worker'].includes(x.status)).map((x) => x.i));
+    const col = (key, label) => html`<div><label>${label}</label><select data-map="${key}"><option value="-1">—</option>${d.header.map((h, j) => html`<option value="${j}" ${raw(d.map[key] === j ? 'selected' : '')}>${h || 'Column ' + (j + 1)}</option>`)}</select></div>`;
+    const counts = rows.reduce((o, x) => { o[x.status] = (o[x.status] || 0) + 1; return o; }, {});
+    const m = modal('Import bank statement', html`<div class="fields">
+      <div class="docfile">${fileLink(up.file)}<span class="muted">${rows.length} rows · ${Object.entries(counts).map(([s, n]) => `${n} ${IMPORT_STATUS[s][0].toLowerCase()}`).join(' · ')}</span></div>
+      ${d.already ? html`<div class="banner" style="margin:0">${d.already} rows from this file are already in Books. Importing again adds them twice.</div>` : ''}
+      <details class="more"><summary>Columns</summary><div class="grid3 cols4">${col('date', 'Date')}${col('desc', 'Description')}${col('amount', 'Amount')}${col('debit', 'Money out')}${col('credit', 'Money in')}</div>
+        <label class="ck" style="margin-top:8px"><input type="checkbox" id="im-flip" ${raw(flip ? 'checked' : '')}><span>Money in and out are the wrong way round</span></label>
+        <button type="button" class="btn ghost sm" id="im-re" style="margin-top:8px">Read again</button></details>
+      <div class="imtable">${rows.map((x) => html`<label class="imrow ${picked.has(x.i) ? 'on' : ''}" data-i="${x.i}">
+        <input type="checkbox" ${raw(picked.has(x.i) ? 'checked' : '')}>
+        <div class="main"><b>${x.party || x.desc}</b><span>${x.date} · ${x.desc}</span>${x.note ? html`<span class="imnote">${x.note}</span>` : ''}</div>
+        ${['new'].includes(x.status) ? html`<select data-cat="${x.i}">${(x.kind === 'income' ? CATS.income : CATS.expense).map((c) => html`<option ${raw(c === x.category ? 'selected' : '')}>${c}</option>`)}</select>` : pill(IMPORT_STATUS[x.status][1], IMPORT_STATUS[x.status][0])}
+        <div class="amt num ${x.amount_cents > 0 ? 'pos' : 'neg'}">${x.amount_cents > 0 ? '+' : '−'}${money(Math.abs(x.amount_cents))}</div></label>`)}</div>
+    </div>`, html`<span class="muted grow" id="im-sum"></span><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit" id="im-go">Add to Books</button>`);
+    m.d.classList.add('wide');
+    const sum = () => { $('#im-sum', m.d).textContent = `${picked.size} picked`; $('#im-go', m.d).textContent = `Add ${picked.size} to Books`; $('#im-go', m.d).disabled = !picked.size; };
+    sum();
+    m.d.addEventListener('change', (e) => {
+      const row = e.target.closest('.imrow');
+      if (row && e.target.type === 'checkbox') { const i = Number(row.dataset.i); if (e.target.checked) picked.add(i); else picked.delete(i); row.classList.toggle('on', e.target.checked); sum(); }
+    });
+    $('#im-re', m.d).addEventListener('click', () => {
+      const mp = {}; $$('[data-map]', m.d).forEach((s) => { mp[s.dataset.map] = Number(s.value); });
+      m.close(); importFlow(up, mp, $('#im-flip', m.d).checked);
+    });
+    m.form.addEventListener('submit', async (e) => {
+      e.preventDefault(); m.err('');
+      const out = rows.filter((x) => picked.has(x.i)).map((x) => ({ date: x.date, amount_cents: x.amount_cents, kind: x.kind, desc: x.desc, party: x.party,
+        category: ($(`[data-cat="${x.i}"]`, m.d) || {}).value || x.category, bill_id: x.bill_id, worker_id: x.worker_id, client_id: x.client_id }));
+      await busy($('#im-go', m.d), async () => {
+        try { const r = await api('import.commit', { file_id: up.file.id, rows: out }); m.close(); toast(`${r.count} added to Books`); refresh(); }
+        catch (err) { m.err(err.message); }
+      });
+    });
+  }
+  async function importsList() {
+    const d = await api('import.list');
+    const m = modal('Bank imports', html`<div class="panel rows flat">${d.imports.length ? d.imports.map((x) => html`<div class="row"><div class="main"><b>${x.name}</b><span>${x.rows} rows · ${fmtDate(x.first)} – ${fmtDate(x.last)} · imported ${fmtDate(x.created_at)}</span></div><span></span>
+      <div class="acts" style="grid-column:auto"><button type="button" class="btn danger sm" data-undo-import="${x.id}">Undo import</button></div></div>`) : empty('No imports yet.')}</div>`,
+      html`<button type="button" class="btn" data-close>Done</button>`);
+    m.d.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-undo-import]'); if (!b) return;
+      if (!confirm('Take every row of this import out of Books?')) return;
+      const r = await api('import.undo', { file_id: Number(b.dataset.undoImport) }); m.close(); toast(`${r.count} rows taken out`); refresh();
+    });
+  }
+
+  // ---------------------------------------------------------------- accountant pack
+  function accountantPack() {
+    const y = new Date().getFullYear();
+    const m = modal('Year-end pack for the accountant', html`<div class="fields">
+      <p class="soft">One Excel file: profit and loss, every transaction, income and expenses, bills, team pay with the 1099 check, and the year's invoices.</p>
+      <div><label for="ap-y">Year</label><select id="ap-y">${[y, y - 1, y - 2, y - 3].map((v) => html`<option ${raw(v === (new Date().getMonth() < 3 ? y - 1 : y) ? 'selected' : '')}>${v}</option>`)}</select></div></div>`,
+      html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">${raw(ICON.down)}Download</button>`);
+    m.form.addEventListener('submit', (e) => { e.preventDefault(); location.href = '/api/export?year=' + encodeURIComponent($('#ap-y', m.d).value); m.close(); toast('Making the file… it downloads in a moment'); });
+  }
+
   // ---------------------------------------------------------------- bills
   let billFilter = 'unpaid';
   const BILL_LABEL = { open: 'unpaid', partial: 'part paid', overdue: 'late', paid: 'paid' };
@@ -1123,7 +1385,7 @@
     state.bills[b.id] = b;
     const sub = [b.number ? '#' + b.number : '', b.due_date ? (b.status === 'paid' ? 'was due ' : 'due ') + fmtDate(b.due_date) : 'no due date', b.category, b.project_name, b.client_name].filter(Boolean).join(' · ');
     return html`<div class="row click" data-act="edit-bill" data-id="${b.id}" tabindex="0">
-      <div class="main"><b>${b.vendor}</b><span>${sub}</span></div>
+      <div class="main"><b>${b.vendor}${b.files ? raw(`<i class="clip">${ICON.clip}</i>`) : ''}</b><span>${sub}</span></div>
       ${pill(b.status === 'partial' ? 'partial' : b.status, BILL_LABEL[b.status])}
       <div class="amt">${money(b.left_cents || b.amount_cents)}<small>${b.status === 'paid' ? 'paid' : b.paid_cents ? 'left of ' + money(b.amount_cents) : fmtDate(b.bill_date)}</small></div>
       ${b.left_cents && can('bills', 'edit') ? html`<div class="acts"><button class="btn sm" data-act="pay-bill" data-id="${b.id}">Pay</button></div>` : ''}
@@ -1135,8 +1397,8 @@
     const t = d.totals;
     return html`
       <div class="head"><div><h1>Bills</h1><div class="sub">What you owe suppliers. Paying a bill puts the expense in your books.</div></div>
-        <div class="acts"><button class="btn ghost" data-act="export-bills">${raw(ICON.down)}Excel</button>
-          ${can('bills', 'edit') ? html`<button class="btn" data-act="new-bill">${raw(ICON.plus)}New bill</button>` : ''}</div></div>
+        <div class="acts">${on('f_bulk') ? html`<button class="btn ghost" data-act="pick-start" data-kind="bills">Select</button>` : ''}<button class="btn ghost" data-act="export-bills">${raw(ICON.down)}Excel</button>
+          ${can('bills', 'edit') ? html`${on('f_uploads') ? html`<button class="btn ghost" data-act="upload" data-hint="bill">${raw(ICON.upload)}Upload bill</button>` : ''}<button class="btn" data-act="new-bill">${raw(ICON.plus)}New bill</button>` : ''}</div></div>
       <div class="kpis three">
         ${kpi('Owed now', money(t.owed), t.open + ' unpaid bill' + (t.open === 1 ? '' : 's'))}
         ${kpi('Late', money(t.late), t.lateCount + ' past the due date', t.lateCount ? 'neg' : '')}
@@ -1145,10 +1407,135 @@
       <div class="chips" style="margin-top:16px" id="bchips">${[['unpaid', 'Unpaid'], ['overdue', 'Late'], ['paid', 'Paid'], ['', 'All']].map(([v, l]) => html`<button type="button" data-bf="${v}" class="${billFilter === v ? 'on' : ''}">${l}</button>`)}</div>
       <div class="panel rows" id="blist"></div>`;
   };
+  const billsShown = () => (state.billList || []).filter((b) => !billFilter || (billFilter === 'unpaid' ? b.left_cents > 0 : b.status === billFilter));
   function drawBills() {
     const box = $('#blist'); if (!box) return;
-    const list = (state.billList || []).filter((b) => !billFilter || (billFilter === 'unpaid' ? b.left_cents > 0 : b.status === billFilter));
-    box.innerHTML = (list.length ? html`${list.map(billRow)}` : empty(billFilter === 'unpaid' ? 'Nothing to pay. Every bill is paid.' : 'No bills here.')).s;
+    const list = billsShown();
+    box.innerHTML = (list.length ? html`${list.map((b) => pickWrap('bills', b.id, billRow(b)))}` : empty(billFilter === 'unpaid' ? 'Nothing to pay. Every bill is paid.' : 'No bills here.')).s;
+  }
+
+  // ---------------------------------------------------------------- picking several rows at once
+  const SHOWN = { invoices: () => invShown().map((i) => i.id), bills: () => billsShown().map((b) => String(b.id)), books: () => booksShown().map((e) => String(e.id)) };
+  function pickWrap(kind, id, row) {
+    if (state.pick.kind !== kind) return row;
+    const on = state.pick.ids.has(String(id));
+    return html`<div class="pick ${on ? 'on' : ''}" data-pick="${id}"><span class="pbox">${raw(on ? ICON.ok : '')}</span>${row}</div>`;
+  }
+  const PICK_ACTS = {
+    invoices: () => [['bulk-remind', 'Email reminder', 'invoices'], ['bulk-paid', 'Mark paid', 'invoices'], ['bulk-void', 'Void', 'invoices'], ['bulk-export', 'Excel', '']],
+    bills: () => [['bulk-pay', 'Pay in full', 'bills'], ['bulk-delete', 'Delete', 'bills'], ['bulk-export', 'Excel', '']],
+    books: () => [['bulk-category', 'Change category', 'books'], ['bulk-project', 'Set project', 'books'], ['bulk-delete', 'Delete', 'books'], ['bulk-export', 'Excel', '']]
+  };
+  function pickStart(kind) {
+    state.pick = { kind, ids: new Set() };
+    pickBar(); redrawPicked();
+  }
+  function pickEnd() {
+    state.pick = { kind: null, ids: new Set() };
+    const b = $('.bulkbar'); if (b) b.remove();
+    redrawPicked();
+  }
+  function redrawPicked() { drawInvoices(); drawBills(); drawBooks(); $$('[data-act="pick-start"]').forEach((x) => x.classList.toggle('on', !!state.pick.kind)); }
+  function pickBar() {
+    let bar = $('.bulkbar');
+    if (!state.pick.kind) { if (bar) bar.remove(); return; }
+    if (!bar) { bar = document.createElement('div'); bar.className = 'bulkbar'; document.body.appendChild(bar); }
+    const n = state.pick.ids.size, kind = state.pick.kind;
+    bar.innerHTML = html`<b>${n} selected</b><button type="button" class="linkbtn" data-act="pick-all">${n && n === SHOWN[kind]().length ? 'Clear' : 'Select all'}</button>
+      <span class="grow"></span>${PICK_ACTS[kind]().filter(([, , sec]) => !sec || can(sec, 'edit')).map(([a, l]) => html`<button type="button" class="btn ${a === 'bulk-delete' || a === 'bulk-void' ? 'danger' : 'ghost'} sm" data-act="${a}" ${raw(n ? '' : 'disabled')}>${l}</button>`)}
+      <button type="button" class="btn ghost sm" data-act="pick-end">Done</button>`.s;
+  }
+  // run one action on every picked row, one after another, and say how it went
+  async function bulkRun(label, ids, fn) {
+    let ok = 0, bad = 0, last = '';
+    const out = [];
+    for (const id of ids) {
+      toast(`${label}… ${ok + bad + 1} of ${ids.length}`);
+      try { out.push(await fn(id)); ok++; } catch (e) { bad++; last = e.message; }
+    }
+    pickEnd();
+    return { ok, bad, last, out };
+  }
+  async function bulkAct(a, btn) {
+    const kind = state.pick.kind, ids = Array.from(state.pick.ids);
+    if (!ids.length) return;
+    if (a === 'bulk-export') {
+      if (kind === 'invoices') { const keep = state.invList; state.invList = keep.filter((i) => ids.includes(i.id)); EXPORTS['export-invoices'](); state.invList = keep; }
+      if (kind === 'bills') { const keep = state.billList; state.billList = keep.filter((b) => ids.includes(String(b.id))); EXPORTS['export-bills'](); state.billList = keep; }
+      if (kind === 'books') { const keep = state.entryList; state.entryList = keep.filter((e) => ids.includes(String(e.id))); EXPORTS['export-books'](); state.entryList = keep; }
+      return;
+    }
+    if (kind === 'invoices') {
+      const inv = ids.map((id) => state.inv[id]).filter(Boolean);
+      if (a === 'bulk-remind') {
+        const open = inv.filter((i) => i.status === 'open' && i.email);
+        if (!open.length) return toast('None of these are open invoices with an email', true);
+        if (!confirm(`Email ${open.length} invoice${open.length === 1 ? '' : 's'} again, with the PDF?`)) return;
+        const r = await bulkRun('Sending', open.map((i) => i.id), (id) => api('invoices.action', { id, action: 'send' }));
+        toast(r.bad ? `${r.ok} sent, ${r.bad} failed: ${r.last}` : `${r.ok} sent`, !!r.bad); return refresh();
+      }
+      if (a === 'bulk-void') {
+        const open = inv.filter((i) => i.status === 'open');
+        if (!open.length) return toast('Only open invoices can be voided', true);
+        if (!confirm(`Void ${open.length} invoice${open.length === 1 ? '' : 's'}? They can no longer be paid. This can't be undone.`)) return;
+        const r = await bulkRun('Voiding', open.map((i) => i.id), (id) => api('invoices.action', { id, action: 'void' }));
+        toast(r.bad ? `${r.ok} voided, ${r.bad} failed: ${r.last}` : `${r.ok} voided`, !!r.bad); return refresh();
+      }
+      if (a === 'bulk-paid') {
+        const open = inv.filter((i) => i.status === 'open' || i.status === 'draft');
+        if (!open.length) return toast('None of these are waiting for payment', true);
+        const m = modal('Mark paid', html`<div class="fields"><p class="soft">${open.length} invoice${open.length === 1 ? '' : 's'} · ${money(open.reduce((x, i) => x + (i.due || i.total), 0))}</p>
+          <div><label for="bp-m">How did they pay?</label><select id="bp-m">${['Cash', 'Check', 'Zelle', 'Bank transfer', 'Other'].map((x) => html`<option>${x}</option>`)}</select></div>
+          <p class="hint">Each invoice is closed and the money goes into your books.</p></div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Mark paid</button>`);
+        m.form.addEventListener('submit', async (e) => {
+          e.preventDefault(); const method = $('#bp-m', m.d).value; m.close();
+          const r = await bulkRun('Marking paid', open.map((i) => i.id), (id) => api('invoices.action', { id, action: 'mark_paid', method }));
+          toast(r.bad ? `${r.ok} marked paid, ${r.bad} failed: ${r.last}` : `${r.ok} marked paid`, !!r.bad); refresh();
+        });
+        return;
+      }
+    }
+    if (kind === 'bills') {
+      if (a === 'bulk-delete') {
+        if (!confirm(`Delete ${ids.length} bill${ids.length === 1 ? '' : 's'}? Payments already made stay in your books.${undoNote()}`)) return;
+        const r = await bulkRun('Deleting', ids, (id) => api('bills.delete', { id: Number(id) }));
+        toast(`${r.ok} deleted`, !!r.bad, r.out.map((x) => x.trash_id)); return refresh();
+      }
+      if (a === 'bulk-pay') {
+        const bl = ids.map((id) => state.bills[id]).filter((b) => b && b.left_cents > 0);
+        if (!bl.length) return toast('These bills are already paid', true);
+        const m = modal('Pay bills in full', html`<div class="fields"><p class="soft">${bl.length} bill${bl.length === 1 ? '' : 's'} · ${money(bl.reduce((x, b) => x + b.left_cents, 0))}</p>
+          <div class="grid2"><div><label for="bb-d">Date paid</label><input id="bb-d" type="date" value="${today()}"></div>
+          <div><label for="bb-m">Paid by</label><select id="bb-m">${METHODS_PAY.map((x) => html`<option ${raw(x === 'Bank transfer' ? 'selected' : '')}>${x}</option>`)}</select></div></div></div>`,
+          html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Pay ${bl.length}</button>`);
+        m.form.addEventListener('submit', async (e) => {
+          e.preventDefault(); const date = $('#bb-d', m.d).value, method = $('#bb-m', m.d).value; m.close();
+          const r = await bulkRun('Paying', bl.map((b) => b.id), (id) => api('bills.pay', { id, amount_cents: state.bills[id].left_cents, date, method }));
+          toast(r.bad ? `${r.ok} paid, ${r.bad} failed: ${r.last}` : `${r.ok} paid`, !!r.bad); refresh();
+        });
+        return;
+      }
+    }
+    if (kind === 'books') {
+      if (a === 'bulk-delete') {
+        if (!confirm(`Delete ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}?${undoNote()}`)) return;
+        const r = await bulkRun('Deleting', ids, (id) => api('entries.delete', { id: Number(id) }));
+        toast(`${r.ok} deleted`, !!r.bad, r.out.map((x) => x.trash_id)); return refresh();
+      }
+      if (a === 'bulk-category' || a === 'bulk-project') {
+        const proj = a === 'bulk-project';
+        const kinds = new Set(ids.map((id) => (state.entries[id] || {}).kind));
+        const cats = kinds.size === 1 ? CATS[[...kinds][0]] : CATS.expense.concat(CATS.income);
+        const m = modal(proj ? 'Set project' : 'Change category', html`<div class="fields"><p class="soft">${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}</p>
+          ${proj ? await projectField('', 'bk-p') || html`<p class="muted">No projects yet.</p>` : html`<div><label for="bk-c">Category</label><select id="bk-c">${cats.map((x) => html`<option>${x}</option>`)}</select></div>`}</div>`,
+          html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Change</button>`);
+        m.form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const args = proj ? { project_id: $('#bk-p', m.d) && $('#bk-p', m.d).value ? Number($('#bk-p', m.d).value) : null } : { category: $('#bk-c', m.d).value };
+          try { const r = await api('entries.bulk', { ids: ids.map(Number), ...args }); m.close(); pickEnd(); toast(`${r.count} changed`); refresh(); } catch (err) { m.err(err.message); }
+        });
+      }
+    }
   }
 
   async function billForm(id) {
@@ -1166,6 +1553,7 @@
       ${await projectField(b.project_id, 'b-project')}
       ${can('clients') ? html`<div><label for="b-client">For a client (optional)</label><select id="b-client"><option value="">None</option>${(await clientsCache()).map((c) => html`<option value="${c.id}" ${raw(String(c.id) === String(b.client_id) ? 'selected' : '')}>${c.name}${c.company ? ' · ' + c.company : ''}</option>`)}</select></div>` : ''}
       <div><label for="b-note">Note</label><input id="b-note" maxlength="1000" value="${b.note || ''}" placeholder="e.g. 30% deposit now, rest on shipping"></div>
+      ${id ? html`<div><label>Files</label><div id="f-files" class="filesbox"></div></div>` : ''}
       ${id ? html`<div><label>Payments</label><div class="panel rows flat">${payments.length ? payments.map((p) => html`<div class="row"><div class="main"><b>${money(p.amount_cents)}</b><span>${[fmtDate(p.date), p.method, p.note].filter(Boolean).join(' · ')}</span></div><span></span>
           ${edit ? html`<button type="button" class="linkbtn" data-act="bill-unpay" data-id="${p.id}">Remove</button>` : html`<span></span>`}</div>`) : empty('Nothing paid yet.')}</div>
         <div class="hint">${money(b.paid_cents)} paid · ${money(b.left_cents)} left</div></div>` : ''}
@@ -1173,17 +1561,18 @@
       ${id && edit && b.left_cents ? html`<button type="button" class="btn ghost" id="b-pay">Pay</button>` : ''}
       <button type="button" class="btn ghost" data-close>${edit ? 'Cancel' : 'Close'}</button>${edit ? html`<button class="btn" type="submit">Save</button>` : ''}`);
     if (!edit) $$('input,select', m.d).forEach((x) => { x.disabled = true; });
+    if (id) filesBox(m, 'bill_id', id);
     if (id && edit) {
       $('#b-del', m.d).addEventListener('click', async () => {
-        if (!confirm('Delete this bill? Payments you already made stay in your books.')) return;
-        try { await api('bills.delete', { id: Number(id) }); m.close(); toast('Bill deleted'); refresh(); } catch (err) { m.err(err.message); }
+        if (!confirm('Delete this bill? Payments you already made stay in your books.' + undoNote())) return;
+        try { const r = await api('bills.delete', { id: Number(id) }); m.close(); toast('Bill deleted', false, r.trash_id); refresh(); } catch (err) { m.err(err.message); }
       });
       const pb = $('#b-pay', m.d); if (pb) pb.addEventListener('click', () => { m.close(); payBillForm(b); });
       m.d.addEventListener('click', async (ev) => {
         const x = ev.target.closest('[data-act="bill-unpay"]'); if (!x) return;
         ev.stopPropagation();
-        if (!confirm('Remove this payment? It is also taken out of your books.')) return;
-        try { await api('entries.delete', { id: Number(x.dataset.id) }); m.close(); toast('Payment removed'); refresh(); } catch (err) { m.err(err.message); }
+        if (!sure('Remove this payment from the bill and from your books?')) return;
+        try { const r = await api('entries.delete', { id: Number(x.dataset.id) }); m.close(); toast('Payment removed', false, r.trash_id); refresh(); } catch (err) { m.err(err.message); }
       });
     }
     m.form.addEventListener('submit', async (ev) => {
@@ -1450,8 +1839,8 @@
       <div><label for="t-note">Note</label><input id="t-note" value="${t.note || ''}" maxlength="2000"></div>
     </div>`, html`<button type="button" class="btn danger" id="t-del" style="margin-right:auto">Delete</button><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
     $('#t-del', m.d).addEventListener('click', async () => {
-      if (!confirm('Delete this task?')) return;
-      try { await api('tasks.delete', { id: t.id }); m.close(); toast('Task deleted'); refresh(); } catch (err) { m.err(err.message); }
+      if (!sure('Delete this task?')) return;
+      try { const r = await api('tasks.delete', { id: t.id }); m.close(); toast('Task deleted', false, r.trash_id); refresh(); } catch (err) { m.err(err.message); }
     });
     m.form.addEventListener('submit', async (ev) => {
       ev.preventDefault(); m.err('');
@@ -1480,8 +1869,8 @@
       <div><label for="h-n">What was done</label><input id="h-n" maxlength="500" value="${l.note || ''}"></div>
     </div>`, html`${logId ? html`<button type="button" class="btn danger" id="h-del" style="margin-right:auto">Delete</button>` : ''}<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
     if (logId) $('#h-del', m.d).addEventListener('click', async () => {
-      if (!confirm('Delete these hours?')) return;
-      try { await api('time.delete', { id: Number(logId) }); m.close(); toast('Deleted'); refresh(); } catch (err) { m.err(err.message); }
+      if (!sure('Delete these hours?')) return;
+      try { const r = await api('time.delete', { id: Number(logId) }); m.close(); toast('Hours deleted', false, r.trash_id); refresh(); } catch (err) { m.err(err.message); }
     });
     m.form.addEventListener('submit', async (ev) => {
       ev.preventDefault(); m.err('');
@@ -1535,7 +1924,7 @@
   };
 
   async function workerPage(id) {
-    const d = await api('workers.get', { id: Number(id) });
+    const [d, act] = await Promise.all([api('workers.get', { id: Number(id) }), on('f_log') ? api('audit.list', { worker_id: Number(id) }).catch(() => ({ items: [] })) : { items: [] }]);
     const w = d.worker;
     state.workers[w.id] = d;
     return html`
@@ -1566,6 +1955,7 @@
           <div class="panel rows">${d.payments.length ? d.payments.map((p) => html`<div class="row"><div class="main"><b>${money(p.amount_cents)}</b><span>${[fmtDate(p.date), p.method, p.project_name, p.note].filter(Boolean).join(' · ')}</span></div><span></span><div class="amt"></div></div>`) : empty('Nothing paid yet.')}</div>
           <p class="hint">Payments are expenses in Books (category Contractors &amp; developers). Delete one there to undo it.</p>
           ${w.notes ? html`<h2 class="sec">Notes</h2><div class="panel pad notes">${w.notes}</div>` : ''}
+          ${act.items.length && on('f_log') ? html`<h2 class="sec">Recent activity <a class="muted" href="#/log">All</a></h2><div class="panel rows">${act.items.slice(0, 10).map(logRow)}</div>` : ''}
           <h2 class="sec">What ${w.name.split(' ')[0]} can see</h2>
           <div class="panel pad">${w.login ? accessSummary(w.perms) : html`<p class="muted">No sign-in. Only you see their records.</p>`}</div>
           <p style="margin-top:28px"><button class="btn danger sm" data-act="delete-worker" data-id="${w.id}">Delete</button></p>
@@ -1722,6 +2112,51 @@
       </div>`;
   }
 
+  // ---------------------------------------------------------------- trash
+  VIEWS.trash = async () => {
+    const d = await api('trash.list');
+    state.trashList = d.items;
+    return html`
+      <div class="head"><div><div class="muted"><a href="#/settings" class="muted">← Settings</a></div><h1>Trash</h1>
+        <div class="sub">Deleted items stay here for 30 days. Bringing one back puts back everything that belonged to it.</div></div>
+        <div class="acts">${d.items.length ? html`<button class="btn danger" data-act="trash-empty">Empty Trash</button>` : ''}</div></div>
+      <div class="panel rows">${d.items.length ? d.items.map((x) => html`<div class="row">
+        <div class="main"><b>${x.label}</b><span>${x.kind_name} · deleted ${ago(x.deleted_at)} by ${x.by}</span></div><span></span>
+        <div class="acts" style="grid-column:auto"><button class="btn sm" data-act="trash-restore" data-id="${x.id}">Bring back</button>
+          <button class="btn ghost sm" data-act="trash-purge" data-id="${x.id}">Delete for good</button></div></div>`) : empty('The Trash is empty.')}</div>
+      <p class="hint">Invoices, payments and refunds in Stripe can't be deleted here, so they never land in the Trash.</p>`;
+  };
+
+  // ---------------------------------------------------------------- activity log
+  let logFilter = { who: '', q: '' };
+  const logRow = (x) => html`<div class="row logrow">${x.link ? raw(`<a class="main" href="${esc(x.link)}" style="text-decoration:none">`) : raw('<div class="main">')}<b>${x.summary}</b><span>${x.who} · ${new Date(x.at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>${raw(x.link ? '</a>' : '</div>')}<span></span><div class="amt"><small>${ago(x.at)}</small></div></div>`;
+  VIEWS.log = async () => {
+    const [d, team] = await Promise.all([api('audit.list', { worker_id: logFilter.who, q: logFilter.q }), on('f_team') ? teamCache() : []]);
+    state.logList = d.items; state.logMore = d.more;
+    return html`
+      <div class="head"><div><div class="muted"><a href="#/settings" class="muted">← Settings</a></div><h1>Activity log</h1>
+        <div class="sub">Every change in the admin, who made it and when. Kept for 2 years.</div></div></div>
+      <div class="filters" id="logform"><select id="logwho"><option value="">Everyone</option><option value="owner" ${raw(logFilter.who === 'owner' ? 'selected' : '')}>You (and Claude for you)</option>
+        ${team.map((w) => html`<option value="${w.id}" ${raw(String(w.id) === logFilter.who ? 'selected' : '')}>${w.name}</option>`)}</select>
+        <div class="search"><span>${raw(ICON.search)}</span><input id="logq" type="search" placeholder="Search, like &quot;invoice&quot; or a name" value="${logFilter.q}"></div></div>
+      <div class="panel rows" id="loglist">${d.items.length ? d.items.map(logRow) : empty('Nothing here yet.')}</div>
+      ${d.more ? html`<p style="margin-top:12px"><button class="btn ghost" data-act="log-more">Show older</button></p>` : ''}`;
+  };
+
+  // ---------------------------------------------------------------- to do (home)
+  const TODO_IC = { invoice: [ICON.invoice, 'r'], bill: [ICON.bill, 'a'], worker: [ICON.team, ''], task: [ICON.task, 'r'], project: [ICON.project, 'a'], failed: [ICON.alert, 'r'], lead: [ICON.mail, ''] };
+  function todoRow(t) {
+    const [ic, tone] = TODO_IC[t.kind] || [ICON.bell, ''];
+    const a = t.act || {};
+    const btn = a.act === 'open' ? html`<a class="btn ghost sm" href="${raw(esc(a.href))}">${a.label}</a>`
+      : a.act === 'inv' ? html`<button class="btn sm" data-act="inv-direct" data-a="${a.a}" data-id="${a.id}">${a.label}</button>`
+      : a.act === 'pay-bill' ? html`<button class="btn sm" data-act="pay-bill-id" data-id="${a.id}">${a.label}</button>`
+      : a.act === 'pay-worker' ? html`<button class="btn sm" data-act="pay-worker" data-worker="${a.worker}">${a.label}</button>` : '';
+    return html`<div class="row"><span class="ic ${tone || (t.late ? 'r' : '')}">${raw(ic)}</span>
+      <a class="main" href="${raw(esc(t.link || '#/home'))}" style="text-decoration:none"><b>${t.title}</b><span>${t.sub}</span></a>
+      <div class="amt">${t.amount ? money(t.amount) : ''}</div><div class="acts">${btn}</div></div>`;
+  }
+
   // ---------------------------------------------------------------- exports
   const stamp = () => today();
   const EXPORTS = {
@@ -1765,6 +2200,16 @@
   document.addEventListener('click', async (e) => {
     const close = e.target.closest('[data-close]');
     if (close) { const d = close.closest('dialog'); if (d) d.close(); return; }
+    if (state.pick.kind && !e.target.closest('.bulkbar,dialog')) {
+      const p = e.target.closest('[data-pick]');
+      if (p) {
+        e.preventDefault();
+        const id = p.dataset.pick;
+        if (state.pick.ids.has(id)) state.pick.ids.delete(id); else state.pick.ids.add(id);
+        p.classList.toggle('on'); p.querySelector('.pbox').innerHTML = state.pick.ids.has(id) ? ICON.ok : '';
+        return pickBar();
+      }
+    }
     const t = e.target.closest('[data-act],[data-cf],[data-if],[data-kf],[data-bf],[data-pf]');
     if (!t) return;
     if (t.dataset.cf !== undefined) { clientFilter.status = t.dataset.cf; $$('#cchips button').forEach((b) => b.classList.toggle('on', b === t)); return drawClients(); }
@@ -1777,11 +2222,35 @@
       if (EXPORTS[a]) return EXPORTS[a]();
       switch (a) {
         case 'theme': return toggleTheme();
+        case 'pick-start': return state.pick.kind ? pickEnd() : pickStart(t.dataset.kind);
+        case 'pick-end': return pickEnd();
+        case 'upload': { const files = await pickFiles(true); if (files.length) await uploadFiles(files, t.dataset.hint || ''); return; }
+        case 'import-bank': { const files = await pickFiles(false, '.csv,.xlsx,.txt'); if (files.length) await uploadFiles(files, 'import'); return; }
+        case 'imports-list': return importsList();
+        case 'accountant-pack': return accountantPack();
+        case 'pick-all': {
+          const all = SHOWN[state.pick.kind]();
+          state.pick.ids = state.pick.ids.size === all.length ? new Set() : new Set(all.map(String));
+          redrawPicked(); return pickBar();
+        }
+        case 'bulk-remind': case 'bulk-paid': case 'bulk-void': case 'bulk-export': case 'bulk-pay': case 'bulk-delete': case 'bulk-category': case 'bulk-project':
+          return bulkAct(a, t);
+        case 'undo': {
+          $('#toast').className = 'toast';
+          const r = await api('trash.restore', { ids: JSON.parse(t.dataset.ids || '[]') });
+          state.clients = null; state.projects = null; state.team = null;
+          toast('Brought back: ' + r.label); return refresh();
+        }
         case 'logout': $$('dialog').forEach((x) => x.close()); await api('logout'); state.clients = null; state.cfg = null; state.me = null; state.projects = null; state.team = null; clearInterval(state.poll); return gate();
         case 'reload': return refresh();
         case 'notifs': return openNotifs();
         case 'notifs-read': await api('notifications.read'); setBadge(0); return refresh();
-        case 'settings-save': return saveSettings(t);
+        case 'summary-send': { const r = await busy(t, () => api('summary.send')); return toast(r.sent ? 'Sent to ' + r.sent : 'Email is not connected'); }
+        case 'connector-key': {
+          if (state.cfg && state.cfg.connector && state.cfg.connector.on && !confirm('Make a new key? The old key stops working right away.')) return;
+          const r = await busy(t, () => api('connector.key')); state.cfg = r; connectorKeyShow(r.key); return refresh();
+        }
+        case 'connector-off': { if (!confirm('Turn off the Claude connector? Your Claude app will no longer reach the admin.')) return; state.cfg = await api('connector.off'); toast('Connector turned off'); return refresh(); }
         case 'alerts-connect': await busy(t, async () => { state.cfg = await api('alerts.connect'); }); toast('Payment alerts are on'); return refresh();
         case 'email-test': { const r = await busy(t, () => api('email.test')); return toast('Test sent to ' + r.to); }
         case 'print': return window.print();
@@ -1796,8 +2265,8 @@
         }
         case 'edit-client': { const id = await clientForm(t.dataset.id); if (id) refresh(); return; }
         case 'delete-client': {
-          if (!confirm('Delete this client from the CRM? Their invoices and payments stay in Stripe.')) return;
-          await api('clients.delete', { id: Number(t.dataset.id) }); await clientsCache(true); toast('Client deleted'); location.hash = '#/clients'; return;
+          if (!confirm('Delete this client? Their invoices and payments stay in Stripe.' + undoNote())) return;
+          const r = await api('clients.delete', { id: Number(t.dataset.id) }); await clientsCache(true); toast('Client deleted', false, r.trash_id); location.hash = '#/clients'; return;
         }
         case 'new-invoice': return invoiceForm(t.dataset.client, t.dataset.project);
         case 'new-charge': return chargeForm(t.dataset.client, t.dataset.project);
@@ -1835,8 +2304,8 @@
         case 'new-project': return projectForm();
         case 'edit-project': return projectForm(t.dataset.id);
         case 'delete-project': {
-          if (!confirm('Delete this project with its tasks, hours and updates? Money in your books stays.')) return;
-          await api('projects.delete', { id: Number(t.dataset.id) }); state.projects = null; toast('Project deleted'); location.hash = '#/projects'; return;
+          if (!confirm('Delete this project with its tasks, hours and updates?' + undoNote())) return;
+          const r = await api('projects.delete', { id: Number(t.dataset.id) }); state.projects = null; toast('Project deleted', false, r.trash_id); location.hash = '#/projects'; return;
         }
         case 'edit-task': return taskForm(Number(t.dataset.id));
         case 'task-next': {
@@ -1857,10 +2326,26 @@
         case 'new-worker': return workerForm();
         case 'edit-worker': return workerForm(t.dataset.id);
         case 'delete-worker': {
-          if (!confirm('Delete this person?')) return;
-          await api('workers.delete', { id: Number(t.dataset.id) }); state.team = null; toast('Deleted'); location.hash = '#/team'; return;
+          if (!confirm('Delete this person?' + undoNote())) return;
+          const r = await api('workers.delete', { id: Number(t.dataset.id) }); state.team = null; toast('Deleted', false, r.trash_id); location.hash = '#/team'; return;
         }
         case 'pay-worker': return payWorkerForm(t.dataset.worker, t.dataset.project);
+        case 'trash-restore': { const r = await busy(t, () => api('trash.restore', { id: Number(t.dataset.id) })); state.clients = null; state.projects = null; toast('Brought back: ' + r.label); return refresh(); }
+        case 'trash-purge': { if (!confirm('Delete this for good? It can\'t be brought back.')) return; await api('trash.purge', { id: Number(t.dataset.id) }); toast('Deleted for good'); return refresh(); }
+        case 'trash-empty': { if (!confirm('Empty the Trash? Nothing in it can be brought back after this.')) return; await api('trash.purge', { all: true }); toast('Trash emptied'); return refresh(); }
+        case 'log-more': {
+          const last = (state.logList || []).slice(-1)[0]; if (!last) return;
+          const r = await busy(t, () => api('audit.list', { before: last.id, worker_id: logFilter.who, q: logFilter.q }));
+          state.logList = state.logList.concat(r.items);
+          $('#loglist').insertAdjacentHTML('beforeend', html`${r.items.map(logRow)}`.s);
+          if (!r.more) t.remove();
+          return;
+        }
+        case 'inv-direct': {
+          if (t.dataset.a === 'send' && !confirm('Email this invoice to the client again, with the PDF?')) return;
+          await busy(t, () => api('invoices.action', { id: t.dataset.id, action: t.dataset.a }));
+          toast('Reminder sent'); return refresh();
+        }
         case 'pay-bill-id': { const r = await api('bills.get', { id: Number(t.dataset.id) }); return payBillForm(r.bill); }
         case 'link-invoices': return linkInvoicesForm(t.dataset.id, t.dataset.client);
         case 'period-go': {
@@ -1871,6 +2356,20 @@
         }
       }
     } catch (err) { toast(err.message, true); }
+  });
+  // drop files anywhere on Books or Bills
+  document.addEventListener('dragover', (e) => {
+    if (!$('#klist') && !$('#blist')) return;
+    if (!(can('books', 'edit') || can('bills', 'edit')) || !(on('f_uploads') || on('f_import'))) return;
+    e.preventDefault(); document.body.classList.add('dragging');
+  });
+  document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dragging'); });
+  document.addEventListener('drop', (e) => {
+    if (!$('#klist') && !$('#blist')) return;
+    e.preventDefault(); document.body.classList.remove('dragging');
+    if (!(on('f_uploads') || on('f_import'))) return;
+    const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
+    if (files.length) uploadFiles(files, $('#blist') ? 'bill' : on('f_uploads') ? '' : 'import');
   });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && e.target.matches && e.target.matches('.row.click')) e.target.click();
@@ -1889,7 +2388,14 @@
     }
     refresh();
   });
+  document.addEventListener('change', (e) => {
+    const el = e.target.closest && e.target.closest('#setwrap [data-set]');
+    if (el) saveOne(el);
+    if (e.target.id === 'logwho') { logFilter.who = e.target.value; refresh(); }
+  });
   document.addEventListener('input', (e) => {
+    if (e.target.id === 'setq') return drawSettings();
+    if (e.target.id === 'logq') { clearTimeout(state.logT); state.logT = setTimeout(() => { logFilter.q = e.target.value; refresh(); }, 450); return; }
     if (e.target.id === 'cq') { clientFilter.q = e.target.value; drawClients(); }
   });
   document.addEventListener('submit', async (e) => {
@@ -1913,7 +2419,7 @@
 
   // after each render, fill in lists that filter on the client side
   const view = () => $('#view');
-  const afterRender = () => { drawClients(); drawInvoices(); drawBooks(); drawBills(); drawProjects(); paintBars(view()); };
+  const afterRender = () => { drawClients(); drawInvoices(); drawBooks(); drawBills(); drawProjects(); drawSettings(); paintBars(view()); };
   document.addEventListener('rendered', afterRender, true);
 
   // client page lives under #/clients/ID

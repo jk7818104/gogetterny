@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/admin.js": {
-      "maxDuration": 30
+      "maxDuration": 60
     },
     "api/lead.js": {
       "maxDuration": 10
@@ -14,6 +14,18 @@
     },
     "api/invoice-pdf.js": {
       "maxDuration": 30
+    },
+    "api/upload.js": {
+      "maxDuration": 30
+    },
+    "api/file.js": {
+      "maxDuration": 20
+    },
+    "api/export.js": {
+      "maxDuration": 60
+    },
+    "api/mcp.js": {
+      "maxDuration": 60
     }
   },
   "headers": [

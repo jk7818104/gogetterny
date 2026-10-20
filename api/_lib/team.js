@@ -55,12 +55,15 @@ const SECTION_OPS = {
   'charges.list': ['payments', 'view'], 'charges.create': ['payments', 'edit'], 'charges.refund': ['payments', 'edit'],
   'cards.list': ['payments', 'view'], 'cards.link': ['payments', 'edit'], 'cards.test': ['payments', 'edit'], 'cards.remove': ['payments', 'edit'],
   'plans.list': ['plans', 'view'], 'plans.create': ['plans', 'edit'], 'plans.cancel': ['plans', 'edit'],
-  'entries.list': ['books', 'view'], 'entries.save': ['books', 'edit'], 'entries.delete': ['books', 'edit'],
+  'entries.list': ['books', 'view'], 'entries.save': ['books', 'edit'], 'entries.delete': ['books', 'edit'], 'entries.bulk': ['books', 'edit'],
   'bills.list': ['bills', 'view'], 'bills.get': ['bills', 'view'], 'bills.save': ['bills', 'edit'], 'bills.delete': ['bills', 'edit'], 'bills.pay': ['bills', 'edit'],
   'report': ['reports', 'view'],
+  'import.preview': ['books', 'edit'], 'import.commit': ['books', 'edit'], 'import.undo': ['books', 'edit'], 'import.list': ['books', 'view'],
   'workers.pay': ['books', 'edit']
 };
 /** Ops that check the member's project rights themselves. */
+/** Ops that check rights themselves, whatever is switched on. */
+const SELF_OPS = new Set(['files.list', 'files.attach', 'files.delete', 'trash.restore']);
 const PROJECT_OPS = new Set(['me.home', 'projects.list', 'projects.get', 'projects.save', 'tasks.save', 'tasks.delete', 'time.save', 'time.delete', 'notes.add', 'team.names']);
 
 /** @param {any} perms @param {string} section @param {'view'|'edit'} need */
@@ -76,10 +79,12 @@ export function hasSection(perms, section, need) {
 export function allowed(ctx, op, settings) {
   if (ctx.owner) return true;
   const p = ctx.perms;
+  if (SELF_OPS.has(op)) return true;
   if (PROJECT_OPS.has(op)) return !!settings.f_projects || op === 'me.home';
   const need = /** @type {any} */ (SECTION_OPS)[op];
   if (!need) return false;   // settings, team, alerts, dashboard: owner only
   const feature = { payments: 'f_payments', plans: 'f_plans', books: 'f_books', bills: 'f_bills', reports: 'f_reports' }[/** @type {string} */ (need[0])];
+  if (op.startsWith('import.') && settings.f_import === false) return false;
   if (feature && settings[feature] === false) return false;
   return hasSection(p, need[0], need[1]);
 }
@@ -96,7 +101,7 @@ export async function memberFor(s, settings) {
 export function meFor(ctx, settings) {
   if (ctx.owner) return { role: 'owner' };
   const f = {};
-  for (const k of ['f_projects', 'f_time', 'f_payments', 'f_plans', 'f_books', 'f_bills', 'f_reports', 'f_cards', 'f_discounts', 'f_fields', 'f_cc', 'f_ach', 'f_reminders'])
+  for (const k of ['f_bulk', 'f_uploads', 'f_import', 'f_pack', 'f_trash', 'f_projects', 'f_time', 'f_payments', 'f_plans', 'f_books', 'f_bills', 'f_reports', 'f_cards', 'f_discounts', 'f_fields', 'f_cc', 'f_ach', 'f_reminders'])
     /** @type {any} */ (f)[k] = settings[k];
   return { role: 'member', id: ctx.worker.id, name: ctx.worker.name, title: ctx.worker.title || '', perms: ctx.perms, features: f, biz_name: settings.biz_name };
 }

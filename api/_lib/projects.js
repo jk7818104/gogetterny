@@ -6,6 +6,7 @@ import { HttpError, str, cents, intId, day, email } from './http.js';
 import { hashPassword } from './auth.js';
 import { normPerms, hasSection } from './team.js';
 import { stripe, stripeKey } from './stripe.js';
+import { trashDelete } from './trash.js';
 
 const TZ = 'America/New_York';
 const nyDay = (/** @type {number} */ ms) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(ms));
@@ -292,9 +293,10 @@ async function projectsSave(/** @type {any} */ b, /** @type {any} */ req, /** @t
 
 async function projectsDelete(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
   need(ctx.owner, 'Only the owner can delete a project');
-  // hours and tasks go with it; money in the books stays (it just loses the project tag)
-  await q(`delete from projects where id=$1`, [intId(b.id)]);
-  return { ok: true };
+  // hours and tasks go with it; money in the books stays (it just loses the project tag). All of it comes back on restore.
+  const p = await one(`select id, name from projects where id=$1`, [intId(b.id)]);
+  if (!p) return { ok: true };
+  return { ok: true, label: p.name, trash_id: await trashDelete('project', p.id, p.name, ctx) };
 }
 
 // ---------- tasks ----------
@@ -333,8 +335,7 @@ async function tasksDelete(/** @type {any} */ b, /** @type {any} */ req, /** @ty
   await mustSee(ctx, t.project_id);
   const lvl = taskLevel(ctx);
   need(lvl === 'all' || (lvl === 'own' && t.worker_id === me(ctx)), 'You can\'t delete this task');
-  await q(`delete from tasks where id=$1`, [t.id]);
-  return { ok: true };
+  return { ok: true, label: t.title, trash_id: await trashDelete('task', t.id, t.title, ctx) };
 }
 
 // ---------- hours ----------
@@ -361,8 +362,8 @@ async function timeDelete(/** @type {any} */ b, /** @type {any} */ req, /** @typ
   const l = await one(`select * from time_logs where id=$1`, [intId(b.id)]);
   if (!l) return { ok: true };
   need(ctx.owner || l.worker_id === me(ctx), 'You can only delete your own hours');
-  await q(`delete from time_logs where id=$1`, [l.id]);
-  return { ok: true };
+  const label = `${Math.round((l.minutes / 60) * 100) / 100} h on ${l.date}`;
+  return { ok: true, label, trash_id: await trashDelete('time', l.id, label, ctx) };
 }
 
 // ---------- updates ----------
@@ -446,8 +447,9 @@ async function workersDelete(/** @type {any} */ b, /** @type {any} */ req, /** @
   const id = intId(b.id);
   const used = await one(`select (select count(*) from time_logs where worker_id=$1)::int + (select count(*) from entries where worker_id=$1)::int as n`, [id]);
   if (used && used.n) throw new HttpError(400, 'They have hours or payments on record. Switch them to "not active" instead, so the history stays.');
-  await q(`delete from workers where id=$1`, [id]);
-  return { ok: true };
+  const w = await one(`select name from workers where id=$1`, [id]);
+  if (!w) return { ok: true };
+  return { ok: true, label: w.name, trash_id: await trashDelete('worker', id, w.name, ctx) };
 }
 
 async function workersPay(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
@@ -487,6 +489,12 @@ async function meHome(/** @type {any} */ b, /** @type {any} */ req, /** @type {a
     hours,
     pay: ctx.perms.pay ? { ...(lab[id] || { minutes: 0, earned: 0, paid: 0, owed: 0 }), rate_cents: ctx.worker.rate_cents, pay_type: ctx.worker.pay_type, payments } : null
   };
+}
+
+/** Everyone who is still owed pay, for the To-do list and the weekly summary. */
+export async function owedByWorker() {
+  const [lab, ws] = await Promise.all([labor(), q(`select id, name from workers`)]);
+  return ws.map((w) => ({ id: w.id, name: w.name, ...(lab[w.id] || { owed: 0, earned: 0, paid: 0, minutes: 0 }) })).filter((w) => w.owed > 0).sort((a, b) => b.owed - a.owed);
 }
 
 export const PROJECT_OPS = {

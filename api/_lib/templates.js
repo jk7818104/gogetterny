@@ -212,3 +212,18 @@ export function testEmail(biz) {
       textLines: ['Email is working.'] })
   };
 }
+
+/**
+ * The Monday summary for the owner.
+ * @param {{range: string, sections: {title: string, rows: [string, string][]}[], headline: string}} d @param {any} biz @param {string} adminUrl
+ */
+export function summaryEmail(d, biz, adminUrl) {
+  const body = h1('Your week') + p(d.headline) + d.sections.map((s) => h2(s.title) + details(s.rows)).join('') +
+    '<div style="height:14px"></div>' + button('Open the admin', adminUrl) +
+    `<p style="margin:14px 0 0;font-size:13px;color:${C.mute}">Sent every Monday morning. Turn it off in the admin under Settings → Alerts to you.</p>`;
+  return {
+    subject: `Your week at ${biz.biz_name || 'GO GETTER'}: ${d.range}`,
+    ...frame({ biz, tag: 'Weekly summary', preheader: d.headline, body,
+      textLines: ['Your week, ' + d.range, d.headline, '', ...d.sections.flatMap((s) => [s.title.toUpperCase(), ...s.rows.map(([a, v]) => `${a}: ${v}`), '']), adminUrl] })
+  };
+}
