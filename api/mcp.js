@@ -247,8 +247,11 @@ function keysFrom(req) {
     const v = req.headers[h];
     for (const one of [].concat(v || [])) {
       for (const part of String(one).split(',')) {
-        const k = part.trim().replace(/^bearer\s+/i, '').trim().replace(/^["']|["']$/g, '');
+        const k = part.trim().replace(/^bearer[\s:+=]*/i, '').trim().replace(/^["']|["']$/g, '');
         if (k) out.push(k);
+        // keys look like gg_ + 32 characters: pick it out even when glued to "Bearer" or other text
+        const found = String(part).match(/gg_[A-Za-z0-9_-]{32}/);
+        if (found && found[0] !== k) out.push(found[0]);
       }
     }
   }
@@ -273,7 +276,7 @@ function authHint(req) {
     const v = req.headers[h];
     if (!v) return `${h}: none`;
     const s = String(v);
-    return `${h}: present (${s.length} chars${/^bearer\s/i.test(s.trim()) ? ', starts with Bearer' : ''}, ends …${s.trim().slice(-4)})`;
+    return `${h}: present (${s.length} chars${/^bearer\s/i.test(s.trim()) ? ', starts with "Bearer "' : /^bearer/i.test(s.trim()) ? ', starts with "Bearer" but no space' : ''}, ends …${s.trim().slice(-4)})`;
   }).join('; ') + `; ?key: ${/[?&]key=/.test(req.url || '') ? 'present' : 'none'}`;
 }
 
