@@ -188,6 +188,43 @@ create table if not exists project_links (
   created_at timestamptz not null default now()
 );
 create index if not exists project_links_project on project_links(project_id);
+create table if not exists trash (
+  id serial primary key,
+  kind text not null,
+  item_id int not null,
+  label text not null,
+  data jsonb not null,
+  deleted_by text not null default 'owner',
+  deleted_at timestamptz not null default now()
+);
+create table if not exists audit_log (
+  id serial primary key,
+  at timestamptz not null default now(),
+  who text not null,
+  worker_id int,
+  op text not null,
+  summary text not null,
+  link text
+);
+create index if not exists audit_at on audit_log(at desc);
+create index if not exists audit_worker on audit_log(worker_id, at desc);
+create table if not exists files (
+  id serial primary key,
+  name text not null,
+  type text not null,
+  size int not null,
+  sha256 text not null,
+  data bytea not null,
+  entry_id int references entries(id) on delete set null,
+  bill_id int references bills(id) on delete set null,
+  project_id int references projects(id) on delete set null,
+  uploaded_by text not null default 'owner',
+  created_at timestamptz not null default now()
+);
+create index if not exists files_entry on files(entry_id);
+create index if not exists files_bill on files(bill_id);
+create index if not exists files_project on files(project_id);
+alter table entries add column if not exists import_file_id int;
 create index if not exists tasks_project on tasks(project_id);
 create index if not exists time_project on time_logs(project_id, worker_id);
 create index if not exists notes_project on project_notes(project_id, created_at);
@@ -205,6 +242,24 @@ export async function q(text, params = []) {
   await ready;
   const r = await p.query(text, params);
   return r.rows;
+}
+
+/**
+ * Run several queries as one: all of them happen, or none. fn gets a query function like q.
+ * @template T @param {(tq: (text: string, params?: any[]) => Promise<any[]>) => Promise<T>} fn @returns {Promise<T>}
+ */
+export async function tx(fn) {
+  await q('select 1');
+  const c = await getPool().connect();
+  try {
+    await c.query('begin');
+    const out = await fn(async (text, params = []) => (await c.query(text, params)).rows);
+    await c.query('commit');
+    return out;
+  } catch (e) {
+    try { await c.query('rollback'); } catch (e2) {}
+    throw e;
+  } finally { c.release(); }
 }
 
 /** @param {string} text @param {any[]} [params] */

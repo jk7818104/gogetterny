@@ -15,6 +15,7 @@ export const DEFAULTS = {
   alert_card: true,
   alert_lead: false,
   alert_bills: true,
+  weekly_summary: true,
   // new invoice defaults
   ach_default: false,
   remind_default: true,
@@ -35,6 +36,7 @@ export const DEFAULTS = {
   f_team: true,
   f_time: true,
   team_login: false,
+  f_ai: true,
   f_reports: true,
   f_discounts: true,
   f_fields: true,

@@ -1,4 +1,5 @@
 // @ts-check
+import crypto from 'node:crypto';
 // Everything the admin screen can do. Each op takes the request body (and the request) and returns JSON.
 import { q, one } from './db.js';
 import { stripe, stripeKey, testMode } from './stripe.js';
@@ -7,7 +8,10 @@ import { getSettings, saveSettings, getKV, setKV } from './settings.js';
 import { emailReady, fromAddress, sendEmail } from './email.js';
 import { testEmail } from './templates.js';
 import { emailInvoiceDoc } from './docs.js';
-import { PROJECT_OPS } from './projects.js';
+import { PROJECT_OPS, owedByWorker } from './projects.js';
+import { trashDelete, TRASH_OPS } from './trash.js';
+import { AUDIT_OPS } from './audit.js';
+import { FILE_OPS, linkFile } from './files.js';
 
 const TZ = 'America/New_York';
 
@@ -193,10 +197,10 @@ async function clientsSave(/** @type {any} */ b) {
   return { id: r.id };
 }
 
-async function clientsDelete(/** @type {any} */ b) {
+async function clientsDelete(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
   const c = await getClient(intId(b.id));
-  await q(`delete from clients where id=$1`, [c.id]);
-  return { ok: true };
+  const label = c.company ? `${c.name} (${c.company})` : c.name;
+  return { ok: true, label, trash_id: await trashDelete('client', c.id, label, ctx) };
 }
 
 async function activityAdd(/** @type {any} */ b) {
@@ -575,7 +579,7 @@ async function entriesList(/** @type {any} */ b) {
   const from = b.from ? day(b.from) : '1900-01-01';
   const to = b.to ? day(b.to) : '2999-12-31';
   const kind = b.kind === 'income' || b.kind === 'expense' ? b.kind : null;
-  const rows = await q(`select e.*, c.name as client_name, p.name as project_name from entries e left join clients c on c.id=e.client_id
+  const rows = await q(`select e.*, c.name as client_name, p.name as project_name, (select count(*) from files f where f.entry_id=e.id)::int as files from entries e left join clients c on c.id=e.client_id
     left join projects p on p.id=e.project_id
     where e.date between $1 and $2 and ($3::text is null or e.kind=$3) order by e.date desc, e.id desc limit 2000`, [from, to, kind]);
   return { entries: rows };
@@ -587,21 +591,35 @@ async function entriesSave(/** @type {any} */ b) {
     b.client_id ? intId(b.client_id) : null, str(b.note, 1000), b.project_id ? intId(b.project_id) : null];
   if (b.id) {
     await q(`update entries set kind=$1, date=$2, amount_cents=$3, category=$4, party=$5, method=$6, client_id=$7, note=$8, project_id=$9 where id=$10`, [...f, intId(b.id)]);
+    await linkFile(b.file_id, { entry_id: Number(b.id) });
     return { id: Number(b.id) };
   }
   const r = await one(`insert into entries(kind, date, amount_cents, category, party, method, client_id, note, project_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, f);
+  await linkFile(b.file_id, { entry_id: r.id });
   return { id: r.id };
 }
 
-async function entriesDelete(/** @type {any} */ b) {
-  await q(`delete from entries where id=$1`, [intId(b.id)]);
-  return { ok: true };
+async function entriesDelete(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
+  const e = await one(`select * from entries where id=$1`, [intId(b.id)]);
+  if (!e) return { ok: true };
+  const label = `${e.kind === 'income' ? 'Income' : 'Expense'} ${money(e.amount_cents)} ${e.party || e.category} (${e.date})`;
+  return { ok: true, label, trash_id: await trashDelete('entry', e.id, label, ctx) };
+}
+
+/** Change several Books entries at once: category and/or project. */
+async function entriesBulk(/** @type {any} */ b) {
+  const ids = (Array.isArray(b.ids) ? b.ids : []).slice(0, 2000).map(intId);
+  if (!ids.length) throw new HttpError(400, 'Pick at least one');
+  let count = 0;
+  if (b.category) count = (await q(`update entries set category=$1 where id = any($2::int[]) returning id`, [str(b.category, 60), ids])).length;
+  if (b.project_id !== undefined) count = (await q(`update entries set project_id=$1 where id = any($2::int[]) returning id`, [b.project_id ? intId(b.project_id) : null, ids])).length;
+  return { ok: true, count };
 }
 
 // ---------- bills (money we owe suppliers) ----------
 // A bill is what a supplier asked us to pay. Each payment is an expense in the books with bill_id set,
 // so the books and the bill can never disagree. Deleting a payment in Books makes the bill unpaid again.
-const BILL_SELECT = `select b.*, c.name as client_name, p.name as project_name,
+const BILL_SELECT = `select b.*, c.name as client_name, p.name as project_name, (select count(*) from files f where f.bill_id=b.id)::int as files,
     coalesce((select sum(e.amount_cents) from entries e where e.bill_id=b.id and e.kind='expense'), 0)::bigint as paid_cents
   from bills b left join clients c on c.id=b.client_id left join projects p on p.id=b.project_id`;
 
@@ -653,16 +671,20 @@ async function billsSave(/** @type {any} */ b) {
     const old = await getBill(intId(b.id));
     if (f[4] < old.paid_cents) throw new HttpError(400, `You already paid ${money(old.paid_cents)} on this bill. The amount can't be less than that.`);
     await q(`update bills set vendor=$1, number=$2, bill_date=$3, due_date=$4, amount_cents=$5, category=$6, client_id=$7, note=$8, project_id=$9, updated_at=now() where id=$10`, [...f, old.id]);
+    await linkFile(b.file_id, { bill_id: old.id });
     return { id: old.id };
   }
   const r = await one(`insert into bills(vendor, number, bill_date, due_date, amount_cents, category, client_id, note, project_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, f);
+  await linkFile(b.file_id, { bill_id: r.id });
   return { id: r.id };
 }
 
-async function billsDelete(/** @type {any} */ b) {
+async function billsDelete(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
   // payments already made stay in the books as expenses (the money really went out)
-  await q(`delete from bills where id=$1`, [intId(b.id)]);
-  return { ok: true };
+  const x = await one(`select * from bills where id=$1`, [intId(b.id)]);
+  if (!x) return { ok: true };
+  const label = `Bill from ${x.vendor}${x.number ? ' #' + x.number : ''} (${money(x.amount_cents)})`;
+  return { ok: true, label, trash_id: await trashDelete('bill', x.id, label, ctx) };
 }
 
 async function billsPay(/** @type {any} */ b) {
@@ -776,11 +798,64 @@ async function dashboard() {
       };
     })() : Promise.resolve({ open: { count: 0, total: 0, overdue: 0, list: [] }, recent: [] })
   ]);
+  const s = await getSettings();
   const bl = await billsList();
   out.bills = { owed: bl.totals.owed, late: bl.totals.lateCount, list: bl.bills.filter((x) => x.left_cents > 0).slice(0, 5) };
+  out.todo = await todoList(out, bl, s);
   out.month = { income: month.totals.income, expenses: month.totals.expenses, profit: month.totals.profit, stripe_fees: month.stripe.fees };
   Object.assign(out, extra, await notificationsList());
   return out;
+}
+
+/**
+ * Things that need you, most urgent first. Each item says what to do and carries what the button needs.
+ * @param {any} d dashboard so far (open invoices) @param {any} bl bills list @param {any} s settings
+ */
+async function todoList(d, bl, s) {
+  const today = nyDay(Date.now());
+  const soon = addDays(today, 3);
+  const md = (/** @type {string} */ d) => new Date(d + 'T12:00:00Z').toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  /** @type {any[]} */ const items = [];
+  const add = (/** @type {number} */ rank, /** @type {any} */ x) => items.push({ rank, ...x });
+  // invoices that are late
+  if (stripeKey()) {
+    try {
+      const st = stripe();
+      const [open, names] = await Promise.all([st.invoices.list({ status: 'open', limit: 100 }), customerNames()]);
+      for (const i of open.data.map((x) => mapInvoice(x, names)).filter((x) => x.overdue)) {
+        const late = Math.floor((Date.now() - i.due_date) / 864e5);
+        add(1, { kind: 'invoice', title: `${i.name} hasn't paid`, sub: `Invoice ${i.number} · ${late} day${late === 1 ? '' : 's'} late`, amount: i.due,
+          act: { act: 'inv', a: 'send', id: i.id, label: 'Email reminder' }, link: i.client_id ? `#/clients/${i.client_id}` : '#/invoices' });
+      }
+    } catch (e) { /* Stripe unreachable: skip */ }
+  }
+  // bills to pay
+  if (s.f_bills) for (const b of bl.bills.filter((x) => x.left_cents > 0 && x.due_date && x.due_date <= soon)) {
+    const late = b.due_date < today;
+    add(late ? 1 : 2, { kind: 'bill', title: `Pay ${b.vendor}`, sub: `${b.number ? 'Bill #' + b.number + ' · ' : ''}${late ? 'late, was due ' : 'due '}${md(b.due_date)}`, amount: b.left_cents, late,
+      act: { act: 'pay-bill', id: b.id, label: 'Pay' }, link: '#/bills' });
+  }
+  // team pay
+  if (s.f_team) for (const w of (await owedByWorker()).slice(0, 8)) {
+    add(3, { kind: 'worker', title: `Pay ${w.name}`, sub: `Earned ${money(w.earned)}, paid ${money(w.paid)}`, amount: w.owed, act: { act: 'pay-worker', worker: w.id, label: 'Pay' }, link: `#/team/${w.id}` });
+  }
+  // late tasks and projects
+  if (s.f_projects) {
+    const late = await q(`select t.id, t.title, t.due_date, t.project_id, p.name as project, w.name as who from tasks t join projects p on p.id=t.project_id
+      left join workers w on w.id=t.worker_id where t.status<>'done' and t.due_date is not null and t.due_date < $1 and p.status<>'done' order by t.due_date limit 10`, [today]);
+    for (const t of late) add(4, { kind: 'task', title: `Late task: ${t.title}`, sub: `${t.project} · ${t.who || 'not assigned'} · was due ${md(t.due_date)}`, link: `#/projects/${t.project_id}`, act: { act: 'open', href: `#/projects/${t.project_id}`, label: 'Open' } });
+    const lp = await q(`select id, name, due_date from projects where status in ('active','planned') and due_date is not null and due_date <= $1 order by due_date limit 5`, [soon]);
+    for (const p of lp) add(p.due_date < today ? 2 : 4, { kind: 'project', title: `${p.name} ${p.due_date < today ? 'is past its due date' : 'is due soon'}`, sub: `Due ${md(p.due_date)}`, link: `#/projects/${p.id}`, act: { act: 'open', href: `#/projects/${p.id}`, label: 'Open' } });
+  }
+  // failed payments in the last 2 weeks
+  const failed = await q(`select title, body, client_id from notifications where kind='failed' and created_at > now() - interval '14 days' order by created_at desc limit 5`);
+  for (const f of failed) add(1, { kind: 'failed', title: f.title, sub: f.body || '', link: f.client_id ? `#/clients/${f.client_id}` : '#/invoices', act: { act: 'open', href: f.client_id ? `#/clients/${f.client_id}` : '#/invoices', label: 'Open' } });
+  // new leads nobody answered (no note, email or invoice yet)
+  const leads = await q(`select c.id, c.name, c.company, c.created_at from clients c where c.status='lead' and c.created_at > now() - interval '30 days'
+    and not exists (select 1 from activity a where a.client_id=c.id and a.kind in ('note','email','invoice','payment','card') and a.body <> 'Auto-reply sent') order by c.created_at desc limit 5`);
+  for (const l of leads) add(3, { kind: 'lead', title: `Answer ${l.name}${l.company ? ' (' + l.company + ')' : ''}`, sub: 'New lead from the website', link: `#/clients/${l.id}`, act: { act: 'open', href: `#/clients/${l.id}`, label: 'Open' } });
+  items.sort((a, b) => a.rank - b.rank || (b.amount || 0) - (a.amount || 0));
+  return items.slice(0, 15);
 }
 
 // ---------- notifications ----------
@@ -813,8 +888,21 @@ async function alertsStatus() {
 }
 
 async function settingsGet() {
-  const [settings, alerts] = await Promise.all([getSettings(), alertsStatus()]);
-  return { settings, alerts, email: { ready: emailReady(), from: fromAddress() }, stripe: !!stripeKey(), testMode: testMode() };
+  const [settings, alerts, mcp, files] = await Promise.all([getSettings(), alertsStatus(), getKV('sys:mcp'),
+    one(`select count(*)::int as n, coalesce(sum(size),0)::bigint as bytes from files`)]);
+  return { settings, alerts, email: { ready: emailReady(), from: fromAddress() }, stripe: !!stripeKey(), testMode: testMode(),
+    connector: { on: !!(mcp && mcp.hash), created: mcp?.created || null, last4: mcp?.last4 || '' }, files: { count: files?.n || 0, bytes: files?.bytes || 0 } };
+}
+
+/** A new secret key for the Claude connector. Shown once; only its fingerprint is kept. The old key stops working. */
+async function connectorKey() {
+  const key = 'gg_' + crypto.randomBytes(24).toString('base64url');
+  await setKV('sys:mcp', { hash: crypto.createHash('sha256').update(key).digest('hex'), created: new Date().toISOString(), last4: key.slice(-4) });
+  return { key, ...(await settingsGet()) };
+}
+async function connectorOff() {
+  await setKV('sys:mcp', {});
+  return settingsGet();
 }
 
 async function settingsSave(/** @type {any} */ b) {
@@ -857,6 +945,8 @@ export const OPS = {
   'settings.save': settingsSave,
   'alerts.connect': alertsConnect,
   'email.test': emailTest,
+  'connector.key': connectorKey,
+  'connector.off': connectorOff,
   'clients.list': clientsList,
   'clients.get': clientsGet,
   'clients.save': clientsSave,
@@ -879,11 +969,15 @@ export const OPS = {
   'entries.list': entriesList,
   'entries.save': entriesSave,
   'entries.delete': entriesDelete,
+  'entries.bulk': entriesBulk,
   'bills.list': billsList,
   'bills.get': billsGet,
   'bills.save': billsSave,
   'bills.delete': billsDelete,
   'bills.pay': billsPay,
   'report': report,
-  ...PROJECT_OPS
+  ...PROJECT_OPS,
+  ...TRASH_OPS,
+  ...AUDIT_OPS,
+  ...FILE_OPS
 };
