@@ -27,6 +27,7 @@ export default async function handler(req, res) {
     const ctx = await contextFor(req);
     if (!ctx) throw new HttpError(401, 'Please sign in');
     if (!canFiles(ctx)) throw new HttpError(403, 'You don\'t have access to this');
+    if (ctx.settings.f_uploads === false && ctx.settings.f_import === false) throw new HttpError(403, 'Uploads are switched off in Settings');
     const name = decodeURIComponent(String(req.headers['x-file-name'] || 'file')).slice(0, 200);
     const buf = await rawBody(req);
     return send(res, 200, await saveUpload(buf, name, String(req.headers['x-file-type'] || ''), ctx));

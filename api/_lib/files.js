@@ -57,6 +57,7 @@ async function filesList(/** @type {any} */ b, /** @type {any} */ req, /** @type
   return { files: await q(`select id, name, type, size, created_at from files where ${col}=$1 order by id`, [intId(b[col])]) };
 }
 async function filesAttach(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
+  if (ctx.settings && ctx.settings.f_uploads === false) throw new HttpError(403, 'Uploads are switched off in Settings');
   if (!canFiles(ctx)) throw new HttpError(403, 'You don\'t have access to this');
   await linkFile(b.file_id, { entry_id: b.entry_id ? intId(b.entry_id) : undefined, bill_id: b.bill_id ? intId(b.bill_id) : undefined, project_id: b.project_id ? intId(b.project_id) : undefined });
   return { ok: true };
@@ -91,7 +92,11 @@ function cleanParty(d) {
 }
 const days = (/** @type {string} */ a, /** @type {string} */ b) => Math.abs(Date.parse(a + 'T12:00:00Z') - Date.parse(b + 'T12:00:00Z')) / 864e5;
 
-async function importPreview(/** @type {any} */ b) {
+/** @param {any} ctx */
+const needImport = (ctx) => { if (ctx && ctx.settings && ctx.settings.f_import === false) throw new HttpError(403, 'Bank import is switched off in Settings'); };
+
+async function importPreview(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
+  needImport(ctx);
   const f = await one(`select id, name, type, data from files where id=$1`, [intId(b.file_id)]);
   if (!f) throw new HttpError(404, 'File not found');
   const rows = await rowsOf(f.data, f.type);
@@ -155,6 +160,7 @@ async function importPreview(/** @type {any} */ b) {
 }
 
 async function importCommit(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
+  needImport(ctx);
   const f = await one(`select id, name from files where id=$1`, [intId(b.file_id)]);
   if (!f) throw new HttpError(404, 'File not found');
   const rows = (Array.isArray(b.rows) ? b.rows : []).slice(0, 3000);

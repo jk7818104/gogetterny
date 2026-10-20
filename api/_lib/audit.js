@@ -2,6 +2,7 @@
 // Who changed what, and when. Every change made in the admin is written here in plain words.
 import { q, one } from './db.js';
 import { intId } from './http.js';
+import { getSettings } from './settings.js';
 
 const money = (/** @type {any} */ c) => '$' + (Number(c || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const nm = (/** @type {any} */ s) => (s ? `"${String(s).slice(0, 80)}"` : '');
@@ -66,7 +67,7 @@ const SAY = {
 
 /** Write one line for a change that worked. Never throws. @param {any} ctx @param {string} op @param {any} body @param {any} data */
 export async function audit(ctx, op, body, data) {
-  if (READS.has(op)) return;
+  if (READS.has(op) || (ctx.settings && ctx.settings.f_log === false)) return;
   try {
     const f = SAY[op];
     const r = f ? await f(body || {}, data || {}) : op;
@@ -79,6 +80,7 @@ export async function audit(ctx, op, body, data) {
 /** Sign-ins are logged too. @param {string} who @param {number|null} workerId */
 export async function auditLogin(who, workerId) {
   try {
+    if ((await getSettings()).f_log === false) return;
     await q(`insert into audit_log(who, worker_id, op, summary) values ($1,$2,'login','Signed in')`, [workerId ? who : 'You', workerId]);
     await q(`delete from audit_log where at < now() - interval '2 years'`);
   } catch (e) {}

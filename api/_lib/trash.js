@@ -26,6 +26,8 @@ const NAMES = { entry: 'Books entry', bill: 'Bill', client: 'Client', project: '
  */
 export async function trashDelete(kind, id, label, ctx) {
   const k = KINDS[kind];
+  // Trash switched off in Settings: deleting is final
+  if (ctx && ctx.settings && ctx.settings.f_trash === false) { await q(`delete from ${k.table} where id=$1`, [id]); return null; }
   return tx(async (tq) => {
     const [row] = await tq(`select * from ${k.table} where id=$1 for update`, [id]);
     if (!row) return null;

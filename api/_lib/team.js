@@ -84,6 +84,7 @@ export function allowed(ctx, op, settings) {
   const need = /** @type {any} */ (SECTION_OPS)[op];
   if (!need) return false;   // settings, team, alerts, dashboard: owner only
   const feature = { payments: 'f_payments', plans: 'f_plans', books: 'f_books', bills: 'f_bills', reports: 'f_reports' }[/** @type {string} */ (need[0])];
+  if (op.startsWith('import.') && settings.f_import === false) return false;
   if (feature && settings[feature] === false) return false;
   return hasSection(p, need[0], need[1]);
 }
@@ -100,7 +101,7 @@ export async function memberFor(s, settings) {
 export function meFor(ctx, settings) {
   if (ctx.owner) return { role: 'owner' };
   const f = {};
-  for (const k of ['f_projects', 'f_time', 'f_payments', 'f_plans', 'f_books', 'f_bills', 'f_reports', 'f_cards', 'f_discounts', 'f_fields', 'f_cc', 'f_ach', 'f_reminders'])
+  for (const k of ['f_bulk', 'f_uploads', 'f_import', 'f_pack', 'f_trash', 'f_projects', 'f_time', 'f_payments', 'f_plans', 'f_books', 'f_bills', 'f_reports', 'f_cards', 'f_discounts', 'f_fields', 'f_cc', 'f_ach', 'f_reminders'])
     /** @type {any} */ (f)[k] = settings[k];
   return { role: 'member', id: ctx.worker.id, name: ctx.worker.name, title: ctx.worker.title || '', perms: ctx.perms, features: f, biz_name: settings.biz_name };
 }

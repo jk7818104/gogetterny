@@ -33,6 +33,7 @@ export default async function handler(req, res) {
     const ctx = await contextFor(req);
     if (!ctx) throw new HttpError(401, 'Please sign in');
     if (!ctx.owner && !hasSection(/** @type {any} */ (ctx).perms, 'reports', 'view')) throw new HttpError(403, 'You don\'t have access to this');
+    if (ctx.settings.f_pack === false || ctx.settings.f_reports === false) throw new HttpError(403, 'The accountant pack is switched off in Settings');
     const year = Number(new URL(req.url || '/', 'http://x').searchParams.get('year'));
     if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new HttpError(400, 'Pick a year');
     const from = `${year}-01-01`, to = `${year}-12-31`;

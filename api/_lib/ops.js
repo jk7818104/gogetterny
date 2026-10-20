@@ -801,7 +801,7 @@ async function dashboard() {
   const s = await getSettings();
   const bl = await billsList();
   out.bills = { owed: bl.totals.owed, late: bl.totals.lateCount, list: bl.bills.filter((x) => x.left_cents > 0).slice(0, 5) };
-  out.todo = await todoList(out, bl, s);
+  out.todo = s.f_todo === false ? [] : await todoList(out, bl, s);
   out.month = { income: month.totals.income, expenses: month.totals.expenses, profit: month.totals.profit, stripe_fees: month.stripe.fees };
   Object.assign(out, extra, await notificationsList());
   return out;
