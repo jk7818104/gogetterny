@@ -237,15 +237,44 @@ Before creating anything, say in one line what you will add. Use search to find 
 
 // ---------- the connection ----------
 /** @param {any} req */
+// The key may come as "Authorization: Bearer <key>", as an "x-api-key" / "x-account-key" header, or as ?key= on the URL.
+// Spaces, quotes and a missing "Bearer" are forgiven, so a sloppy paste still works.
+const KEY_HEADERS = ['authorization', 'x-api-key', 'x-account-key', 'x-gogetter-key'];
+/** @param {any} req */
+function keysFrom(req) {
+  /** @type {string[]} */ const out = [];
+  for (const h of KEY_HEADERS) {
+    const v = req.headers[h];
+    for (const one of [].concat(v || [])) {
+      for (const part of String(one).split(',')) {
+        const k = part.trim().replace(/^bearer\s+/i, '').trim().replace(/^["']|["']$/g, '');
+        if (k) out.push(k);
+      }
+    }
+  }
+  try { const k = new URL(req.url || '', 'https://x').searchParams.get('key'); if (k && k.trim()) out.push(k.trim()); } catch (e) {}
+  return out;
+}
+/** @param {any} req */
 async function authorized(req) {
-  const h = String(req.headers.authorization || '');
-  const m = h.match(/^Bearer\s+(\S+)$/i);
-  if (!m) return false;
+  const keys = keysFrom(req);
+  if (!keys.length) return false;
   const saved = await getKV('sys:mcp');
   if (!saved || !saved.hash) return false;
-  const got = crypto.createHash('sha256').update(m[1]).digest();
   const want = Buffer.from(saved.hash, 'hex');
-  return got.length === want.length && crypto.timingSafeEqual(got, want);
+  return keys.some((k) => {
+    const got = crypto.createHash('sha256').update(k).digest();
+    return got.length === want.length && crypto.timingSafeEqual(got, want);
+  });
+}
+/** What arrived, without the secret: helps find why a connector is refused (shows in Vercel logs). @param {any} req */
+function authHint(req) {
+  return KEY_HEADERS.map((h) => {
+    const v = req.headers[h];
+    if (!v) return `${h}: none`;
+    const s = String(v);
+    return `${h}: present (${s.length} chars${/^bearer\s/i.test(s.trim()) ? ', starts with Bearer' : ''}, ends …${s.trim().slice(-4)})`;
+  }).join('; ') + `; ?key: ${/[?&]key=/.test(req.url || '') ? 'present' : 'none'}`;
 }
 
 /** @param {any} msg @param {any} ctx */
@@ -295,7 +324,12 @@ export default async function handler(req, res) {
     if (!dbUrl()) throw new HttpError(503, 'Not set up');
     const ip = clientIp(req);
     if (await recentHits('mcp', ip, 15) >= 20) throw new HttpError(429, 'Too many tries');
-    if (!(await authorized(req))) { await addHit('mcp', ip); return send(res, 401, { error: 'Missing or wrong key' }, { 'WWW-Authenticate': 'Bearer' }); }
+    if (!(await authorized(req))) {
+      await addHit('mcp', ip);
+      const saved = await getKV('sys:mcp');
+      console.warn('mcp 401 —', authHint(req), `; saved key ends …${saved?.last4 || 'none'}`);
+      return send(res, 401, { jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Missing or wrong key. Make a new key in Settings → Claude connector.' } });
+    }
     const settings = await getSettings();
     if (settings.f_ai === false) throw new HttpError(403, 'The Claude connector is switched off in Settings');
     const ctx = { owner: true, via: 'claude', settings };
