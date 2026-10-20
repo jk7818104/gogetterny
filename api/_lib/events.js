@@ -31,6 +31,24 @@ export async function handleEvent(ev) {
   }
 }
 
+/** If the money belongs to a project, say so on the project's updates. Never throws. @param {any} inv @param {number} amount @param {boolean} plan */
+async function projectNote(inv, amount, plan) {
+  try {
+    let pid = Number(inv.metadata?.gg_project) || null;
+    if (!pid) pid = (await one(`select project_id from project_links where stripe_id=$1`, [inv.id]))?.project_id || null;
+    if (!pid && plan) {
+      const subId = idOf(inv.parent.subscription_details.subscription);
+      const sub = subId ? await stripe().subscriptions.retrieve(subId) : null;
+      const sched = sub ? idOf(sub.schedule) : null;
+      if (sched) pid = (await one(`select project_id from plans where schedule_id=$1`, [sched]))?.project_id || null;
+    }
+    if (!pid || !(await one(`select id from projects where id=$1`, [pid]))) return;
+    const how = inv.paid_out_of_band ? 'marked paid' : 'paid online';
+    await q(`insert into project_notes(project_id, author, body) values ($1,'Payments',$2)`,
+      [pid, `${plan ? 'Payment plan payment' : 'Invoice ' + inv.number} ${how}: ${money(amount)} came in`]);
+  } catch (e) { console.error('project note failed', /** @type {any} */ (e).message); }
+}
+
 /** @param {string} id */
 async function invoicePaid(id) {
   const st = stripe();
@@ -50,6 +68,7 @@ async function invoicePaid(id) {
     await notify({ kind: 'paid', title: `${name} paid ${money(amount)}`, body: plan ? `Payment plan, invoice ${inv.number}` : `Invoice ${inv.number}`, clientId: c?.id });
     await alertOwner(s, 'alert_paid', `${name} paid ${money(amount)}`, [['Invoice', inv.number || ''], ['Amount', money(amount)], ['Type', plan ? 'Payment plan' : 'Invoice']], c ? `#/clients/${c.id}` : '#/invoices');
   }
+  await projectNote(inv, amount, plan);
   if (s.paid_thankyou && emailReady() && inv.customer_email && amount > 0) {
     try {
       await emailInvoiceDoc(inv.id, s, 'receipt', { amount });

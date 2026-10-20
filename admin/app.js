@@ -26,7 +26,13 @@
     gear: I('<circle cx="12" cy="12" r="3.2"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.6-2-3.4-2.4.9a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.4 2.4A7.6 7.6 0 0 0 7 6.4l-2.4-.9-2 3.4 2 1.6a7.6 7.6 0 0 0 0 3l-2 1.6 2 3.4 2.4-.9a7.6 7.6 0 0 0 2.6 1.5l.4 2.4h4l.4-2.4a7.6 7.6 0 0 0 2.6-1.5l2.4.9 2-3.4z"/>'),
     mail: I('<rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="M3.8 6.8L12 13l8.2-6.2"/>'),
     alert: I('<path d="M12 3.5L2.5 20h19z"/><path d="M12 10v4.5M12 17.2v.3"/>'),
-    no: I('<path d="M6 6l12 12M18 6L6 18"/>')
+    no: I('<path d="M6 6l12 12M18 6L6 18"/>'),
+    bill: I('<path d="M6 2.5h12v19l-3-2-3 2-3-2-3 2z"/><path d="M9 7.5h6M9 11h6M9 14.5h4"/>'),
+    project: I('<path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H10l2 2h7.5A1.5 1.5 0 0 1 21 9.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M8 14l2.5 2.5L16 11"/>'),
+    team: I('<circle cx="12" cy="7.5" r="3.2"/><path d="M5.5 20c.5-3.6 3.2-5.6 6.5-5.6s6 2 6.5 5.6"/><circle cx="4.8" cy="10" r="2.2"/><circle cx="19.2" cy="10" r="2.2"/>'),
+    clock: I('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
+    more: I('<circle cx="5.5" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18.5" cy="12" r="1.4"/>'),
+    task: I('<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M8 12.5l3 3 5-6"/>')
   };
 
   // ---------------------------------------------------------------- html helpers (everything is escaped unless wrapped in raw)
@@ -87,7 +93,7 @@
   }
 
   // ---------------------------------------------------------------- server
-  const state = { status: null, clients: null, inv: {}, ch: {}, plans: {}, entries: {} };
+  const state = { status: null, me: null, clients: null, projects: null, team: null, inv: {}, ch: {}, plans: {}, entries: {}, bills: {}, tasks: {}, logs: {}, workers: {} };
   async function api(op, args = {}) {
     let r, d;
     try {
@@ -121,8 +127,9 @@
     $('#root').innerHTML = html`<div class="gate"><div class="box">
       ${raw(LOGO)}
       ${ready ? html`
-        <h1>Admin sign in</h1><p>Only for you. Enter your admin password.</p>
-        <form id="login"><div><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required autofocus></div>
+        <h1>Sign in</h1><p>Owner: just your admin password. Team members: your email and password.</p>
+        <form id="login"><div><label for="em">Email <span class="muted">(team members only)</span></label><input id="em" type="email" autocomplete="username" maxlength="200"></div>
+        <div style="margin-top:12px"><label for="pw">Password</label><input id="pw" type="password" autocomplete="current-password" required autofocus></div>
         <p class="err" id="lerr"></p><button class="btn wide" type="submit">Sign in</button></form>` : html`
         <h1>Almost ready</h1><p>Add these in Vercel, under Settings → Environment Variables, then redeploy.</p>
         <ul class="setup">
@@ -135,7 +142,7 @@
     if (f) f.addEventListener('submit', async (e) => {
       e.preventDefault();
       const btn = f.querySelector('button'); btn.disabled = true; $('#lerr').textContent = '';
-      try { await api('login', { password: $('#pw').value }); await boot(); }
+      try { await api('login', { email: $('#em').value.trim(), password: $('#pw').value }); await boot(); }
       catch (err) { $('#lerr').textContent = err.message; btn.disabled = false; $('#pw').select(); }
     });
   }
@@ -143,22 +150,36 @@
   // ---------------------------------------------------------------- shell + router
   const NAV_ALL = [
     ['home', 'Home', ICON.home], ['clients', 'Clients', ICON.clients], ['invoices', 'Invoices', ICON.invoice],
-    ['payments', 'Payments', ICON.card, 'f_payments'], ['plans', 'Plans', ICON.plan, 'f_plans'], ['books', 'Books', ICON.books, 'f_books'], ['reports', 'Reports', ICON.report, 'f_reports']
+    ['payments', 'Payments', ICON.card, 'f_payments'], ['plans', 'Plans', ICON.plan, 'f_plans'], ['books', 'Books', ICON.books, 'f_books'],
+    ['bills', 'Bills', ICON.bill, 'f_bills'], ['reports', 'Reports', ICON.report, 'f_reports'],
+    ['projects', 'Projects', ICON.project, 'f_projects'], ['team', 'Team', ICON.team, 'f_team']
   ];
+  // signed in as a team member (not the owner)?
+  const member = () => !!(state.me && state.me.role === 'member');
+  const perms = () => (member() ? state.me.perms : null);
   // a feature is on unless it was switched off in Settings
-  const on = (f) => !(state.cfg && state.cfg.settings && state.cfg.settings[f] === false);
+  const on = (f) => member() ? state.me.features[f] !== false : !(state.cfg && state.cfg.settings && state.cfg.settings[f] === false);
+  // may the signed-in person see (or change) this part of the admin? The owner can do everything.
+  const can = (section, lvl = 'view') => {
+    if (!member()) return true;
+    const v = perms().sections[section];
+    return lvl === 'view' ? !!v : v === 'edit';
+  };
   const mailOn = () => !!(state.cfg && state.cfg.email && state.cfg.email.ready);
-  const navItems = () => NAV_ALL.filter((n) => !n[3] || on(n[3]));
+  const memberNav = (k) => k === 'home' || (k === 'projects' ? perms().projects !== 'none' : k === 'team' ? false : can(k));
+  const navItems = () => NAV_ALL.filter((n) => (!n[3] || on(n[3])) && (!member() || memberNav(n[0])));
   function shell() {
     const mode = state.status.testMode ? html`<span class="mode">Test mode</span>` : '';
     const nav = navItems();
-    const bell = on('f_notifications');
+    const bell = !member() && on('f_notifications');
+    // phones: up to 5 tabs, the rest under "More"
+    const tabs = nav.length > 5 ? nav.slice(0, 4).concat([['more', 'More', ICON.more]]) : nav;
     $('#root').innerHTML = html`<div class="shell">
       <aside class="side">${raw(LOGO)}${mode}
         <nav class="nav">${nav.map(([k, l, i]) => html`<a href="#/${k}" data-nav="${k}">${raw(i)}<span>${l}</span></a>`)}</nav>
         <div class="foot">
           ${bell ? html`<button type="button" data-act="notifs">${raw(ICON.bell)}<span>Notifications</span><b class="badge hide" data-badge></b></button>` : ''}
-          <a href="#/settings" data-nav="settings">${raw(ICON.gear)}<span>Settings</span></a>
+          ${member() ? html`<div class="whoami"><b>${state.me.name}</b><span>${state.me.biz_name}</span></div>` : html`<a href="#/settings" data-nav="settings">${raw(ICON.gear)}<span>Settings</span></a>`}
           <button type="button" data-act="theme" data-label="1">${raw(isLight() ? ICON.moon : ICON.sun)}<span>${isLight() ? 'Night mode' : 'Day mode'}</span></button>
           <button type="button" data-act="logout">${raw(ICON.out)}<span>Sign out</span></button>
         </div>
@@ -166,10 +187,12 @@
       <div>
         <div class="topbar">${raw(LOGO)}<div class="r">${mode}
           ${bell ? html`<button class="btn ghost sm ib" type="button" data-act="notifs" aria-label="Notifications">${raw(ICON.bell)}<b class="badge dot hide" data-badge></b></button>` : ''}
-          <a class="btn ghost sm" href="#/settings" aria-label="Settings">${raw(ICON.gear)}</a></div></div>
+          ${member() ? html`<button class="btn ghost sm" type="button" data-act="logout">Sign out</button>` : html`<a class="btn ghost sm" href="#/settings" aria-label="Settings">${raw(ICON.gear)}</a>`}</div></div>
         <main class="view" id="view"></main>
       </div>
-      <nav class="tabs" style="grid-template-columns:repeat(${nav.length},1fr)">${nav.map(([k, l, i]) => html`<a href="#/${k}" data-nav="${k}">${raw(i)}<span>${l}</span></a>`)}</nav>
+      <nav class="tabs" style="grid-template-columns:repeat(${tabs.length},1fr)">${tabs.map(([k, l, i]) => k === 'more'
+        ? html`<a href="#" data-act="more" data-nav="more">${raw(i)}<span>${l}</span></a>`
+        : html`<a href="#/${k}" data-nav="${k}">${raw(i)}<span>${l}</span></a>`)}</nav>
     </div>`.s;
     setBadge(state.unread || 0);
   }
@@ -184,9 +207,12 @@
     const id = ++routeId;
     const h = location.hash.replace(/^#\/?/, '') || 'home';
     const [name, arg] = h.split('/');
-    const hiddenNav = NAV_ALL.find((n) => n[0] === name && n[3] && !on(n[3]));
-    const key = VIEWS[name] && !hiddenNav ? name : 'home';
+    const shown = navItems().map((n) => n[0]);
+    const blocked = (NAV_ALL.some((n) => n[0] === name) && !shown.includes(name)) || (name === 'settings' && member());
+    const key = VIEWS[name] && !blocked ? name : 'home';
     $$('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === key));
+    const inMore = !$$('.tabs [data-nav]').some((a) => a.dataset.nav === key);
+    $$('.tabs [data-nav="more"]').forEach((a) => a.classList.toggle('on', inMore && key !== 'home'));
     const v = $('#view');
     if (!v) return;
     v.innerHTML = '<div class="loading"><div class="spin"></div>Loading…</div>';
@@ -205,9 +231,10 @@
 
   // ---------------------------------------------------------------- shared rows
   function invoiceRow(i, opts = {}) {
+    if (!can('invoices', 'edit')) opts = { ...opts, acts: false };
     state.inv[i.id] = i;
     const st = i.overdue ? 'overdue' : i.status;
-    const sub = [i.number || 'Draft', fmtDate(i.created), i.due_date && i.status === 'open' ? 'due ' + fmtDate(i.due_date) : '', i.plan ? 'payment plan' : '',
+    const sub = [i.number || 'Draft', i.project_name, fmtDate(i.created), i.due_date && i.status === 'open' ? 'due ' + fmtDate(i.due_date) : '', i.plan ? 'payment plan' : '',
       i.extras, i.bank && i.status === 'open' ? 'card or bank' : '', i.remind && i.status === 'open' && on('f_reminders') && mailOn() ? 'reminders on' : ''].filter(Boolean).join(' · ');
     const acts = [];
     if (opts.acts) {
@@ -235,6 +262,7 @@
     ${raw(tag === 'a' ? '</a>' : '</div>')}`;
   }
   function chargeRow(c, opts = {}) {
+    if (!can('payments', 'edit')) opts = { ...opts, acts: false };
     state.ch[c.id] = c;
     const st = c.refunded && c.refunded >= c.amount ? 'refunded' : c.status;
     const acts = [];
@@ -252,6 +280,7 @@
     ${raw(tag ? '</a>' : '</div>')}`;
   }
   function planRow(p, opts = {}) {
+    if (!can('plans', 'edit')) opts = { ...opts, acts: false };
     state.plans[p.id] = p;
     const pct = Math.min(100, Math.round(((p.paid || 0) / p.count) * 100));
     const who = p.client_name ? (p.client_company ? `${p.client_name} (${p.client_company})` : p.client_name) : '';
@@ -270,7 +299,7 @@
   function paintBars(el) { $$('.progress i[data-w]', el).forEach((i) => { i.style.width = i.dataset.w + '%'; }); }
 
   const empty = (t) => html`<div class="empty">${t}</div>`;
-  const NICON = { paid: ICON.ok, failed: ICON.alert, dispute: ICON.alert, card: ICON.card, lead: ICON.mail };
+  const NICON = { paid: ICON.ok, failed: ICON.alert, dispute: ICON.alert, card: ICON.card, lead: ICON.mail, bill: ICON.bill };
   function ago(ts) {
     const s = (Date.now() - new Date(ts).getTime()) / 1000;
     if (s < 60) return 'just now'; if (s < 3600) return Math.floor(s / 60) + ' min ago';
@@ -278,7 +307,7 @@
     return fmtDate(ts);
   }
   function notifRow(n) {
-    const href = n.client_id ? '#/clients/' + Number(n.client_id) : '#/home';
+    const href = n.client_id ? '#/clients/' + Number(n.client_id) : n.kind === 'bill' ? '#/bills' : '#/home';
     return html`<a class="row nrow ${n.read_at ? '' : 'unread'}" href="${raw(href)}" data-close>
       <span class="nk nk-${n.kind}">${raw(NICON[n.kind] || ICON.bell)}</span>
       <div class="main"><b>${n.title}</b><span>${n.body || ''}</span></div>
@@ -296,6 +325,7 @@
 
   // ---------------------------------------------------------------- views
   VIEWS.home = async () => {
+    if (member()) return memberHome();
     const d = await api('dashboard');
     setBadge(d.unread || 0);
     const fresh = (d.notifications || []).filter((n) => !n.read_at).slice(0, 6);
@@ -318,6 +348,7 @@
         if (on('f_cards')) q.push(html`<button type="button" data-act="new-charge">${raw(ICON.card)}Charge a card</button>`);
         if (on('f_plans')) q.push(html`<button type="button" data-act="new-plan">${raw(ICON.plan)}Payment plan</button>`);
         if (on('f_books')) q.push(html`<button type="button" data-act="new-entry" data-kind="expense">${raw(ICON.dollar)}Add expense</button>`);
+        if (on('f_bills')) q.push(html`<button type="button" data-act="new-bill">${raw(ICON.bill)}Add bill</button>`);
         q.push(html`<button type="button" data-act="new-client">${raw(ICON.user)}Add client</button>`);
         return html`<div class="quick" style="--n:${q.length}">${q}</div>`;
       })()}
@@ -327,6 +358,8 @@
         <div><h2 class="sec">Latest payments <a class="muted" href="#/payments">See all</a></h2>
           <div class="panel rows">${d.recent.length ? d.recent.map((c) => chargeRow(c, { link: true })) : empty('No card payments yet.')}</div></div>
       </div>
+      ${on('f_bills') && d.bills && d.bills.list.length ? html`<h2 class="sec">Bills to pay <a class="muted" href="#/bills">${money(d.bills.owed)} owed${d.bills.late ? ` · ${d.bills.late} late` : ''}</a></h2>
+        <div class="panel rows">${d.bills.list.map((b) => billRow(b))}</div>` : ''}
       ${d.recentLeads.length ? html`<h2 class="sec">New leads <span class="muted">${d.counts.leads} total</span></h2>
         <div class="panel rows">${d.recentLeads.map((c) => html`<a class="row" href="#/clients/${c.id}"><div class="main"><b>${c.name}</b><span>${[c.company, c.email, c.phone].filter(Boolean).join(' · ')}</span></div>${pill('lead')}<div class="amt"><small>${fmtDate(c.created_at)}</small></div></a>`)}</div>` : ''}
     `;
@@ -337,7 +370,7 @@
     const list = await clientsCache(true);
     return html`
       <div class="head"><div><h1>Clients</h1><div class="sub">${list.length} total · ${list.filter((c) => c.status === 'lead').length} leads</div></div>
-        <div class="acts"><button class="btn ghost" data-act="export-clients">${raw(ICON.down)}Excel</button><button class="btn" data-act="new-client">${raw(ICON.plus)}New client</button></div></div>
+        <div class="acts"><button class="btn ghost" data-act="export-clients">${raw(ICON.down)}Excel</button>${can('clients', 'edit') ? html`<button class="btn" data-act="new-client">${raw(ICON.plus)}New client</button>` : ''}</div></div>
       <div class="bar"><div class="search grow">${raw(ICON.search)}<input id="cq" type="search" placeholder="Search name, company, email, phone" value="${clientFilter.q}"></div></div>
       <div class="chips" id="cchips">${[['', 'All'], ['lead', 'Leads'], ['active', 'Active'], ['past', 'Past']].map(([v, l]) => html`<button type="button" data-cf="${v}" class="${clientFilter.status === v ? 'on' : ''}">${l}</button>`)}</div>
       <div class="panel rows" id="clist"></div>`;
@@ -365,10 +398,10 @@
           <div class="who">${c.email ? html`<a href="mailto:${c.email}">${c.email}</a>` : ''}${c.phone ? html`<a href="tel:${c.phone.replace(/[^\d+]/g, '')}">${c.phone}</a>` : ''}${c.address ? html`<span>${c.address}</span>` : ''}</div>
         </div>
         <div class="acts">
-          <button class="btn" data-act="new-invoice" data-client="${c.id}">${raw(ICON.invoice)}Invoice</button>
-          ${on('f_cards') ? html`<button class="btn ghost" data-act="new-charge" data-client="${c.id}">${raw(ICON.card)}Charge card</button>` : ''}
-          ${on('f_plans') ? html`<button class="btn ghost" data-act="new-plan" data-client="${c.id}">${raw(ICON.plan)}Payment plan</button>` : ''}
-          <button class="btn ghost" data-act="edit-client" data-id="${c.id}">Edit</button>
+          ${can('invoices', 'edit') ? html`<button class="btn" data-act="new-invoice" data-client="${c.id}">${raw(ICON.invoice)}Invoice</button>` : ''}
+          ${on('f_cards') && can('payments', 'edit') ? html`<button class="btn ghost" data-act="new-charge" data-client="${c.id}">${raw(ICON.card)}Charge card</button>` : ''}
+          ${on('f_plans') && can('plans', 'edit') ? html`<button class="btn ghost" data-act="new-plan" data-client="${c.id}">${raw(ICON.plan)}Payment plan</button>` : ''}
+          ${can('clients', 'edit') ? html`<button class="btn ghost" data-act="edit-client" data-id="${c.id}">Edit</button>` : ''}
         </div></div>
       ${noStripe()}
       <div class="cols">
@@ -391,7 +424,7 @@
             <div class="rows">${d.activity.length ? d.activity.map((a) => html`<div class="row"><div class="main"><b>${a.body}</b><span>${a.kind}</span></div><div class="amt"><small>${fmtDate(a.created_at)}</small></div></div>`) : empty('Nothing yet.')}</div>
           </div>
           ${entries.length && on('f_books') ? html`<h2 class="sec">In your books</h2><div class="panel rows">${entries.map(entryRow)}</div>` : ''}
-          <p style="margin-top:28px"><button class="btn danger sm" data-act="delete-client" data-id="${c.id}">Delete client</button></p>
+          ${can('clients', 'edit') ? html`<p style="margin-top:28px"><button class="btn danger sm" data-act="delete-client" data-id="${c.id}">Delete client</button></p>` : ''}
         </div>
       </div>`;
   };
@@ -403,7 +436,7 @@
     const open = d.invoices.filter((i) => i.status === 'open');
     return html`
       <div class="head"><div><h1>Invoices</h1><div class="sub">${money(open.reduce((s, i) => s + i.due, 0))} waiting · ${open.filter((i) => i.overdue).length} late</div></div>
-        <div class="acts"><button class="btn ghost" data-act="export-invoices">${raw(ICON.down)}Excel</button><button class="btn" data-act="new-invoice">${raw(ICON.plus)}New invoice</button></div></div>
+        <div class="acts"><button class="btn ghost" data-act="export-invoices">${raw(ICON.down)}Excel</button>${can('invoices', 'edit') ? html`<button class="btn" data-act="new-invoice">${raw(ICON.plus)}New invoice</button>` : ''}</div></div>
       <div class="chips" id="ichips">${[['', 'All'], ['open', 'Waiting'], ['overdue', 'Late'], ['paid', 'Paid'], ['draft', 'Drafts'], ['void', 'Void']].map(([v, l]) => html`<button type="button" data-if="${v}" class="${invFilter === v ? 'on' : ''}">${l}</button>`)}</div>
       <div class="panel rows" id="ilist"></div>`;
   };
@@ -419,7 +452,7 @@
     const ok = d.charges.filter((c) => c.status === 'succeeded');
     return html`
       <div class="head"><div><h1>Payments</h1><div class="sub">Last ${d.charges.length} card payments · ${money(ok.reduce((s, c) => s + c.amount - c.refunded, 0))} received</div></div>
-        <div class="acts"><button class="btn ghost" data-act="export-payments">${raw(ICON.down)}Excel</button><button class="btn" data-act="new-charge">${raw(ICON.card)}Charge a card</button></div></div>
+        <div class="acts"><button class="btn ghost" data-act="export-payments">${raw(ICON.down)}Excel</button>${can('payments', 'edit') ? html`<button class="btn" data-act="new-charge">${raw(ICON.card)}Charge a card</button>` : ''}</div></div>
       <div class="panel rows">${d.charges.length ? d.charges.map((c) => chargeRow(c, { acts: true, link: false })) : empty('No card payments yet.')}</div>`;
   };
 
@@ -427,7 +460,7 @@
     const d = await api('plans.list');
     return html`
       <div class="head"><div><h1>Payment plans</h1><div class="sub">Split a total into weekly or monthly payments. Stripe collects each one on time.</div></div>
-        <div class="acts"><button class="btn" data-act="new-plan">${raw(ICON.plus)}New payment plan</button></div></div>
+        <div class="acts">${can('plans', 'edit') ? html`<button class="btn" data-act="new-plan">${raw(ICON.plus)}New payment plan</button>` : ''}</div></div>
       <div class="panel rows">${d.plans.length ? d.plans.map((p) => planRow(p, { acts: true, client: true })) : empty('No payment plans yet.')}</div>`;
   };
 
@@ -460,7 +493,7 @@
     state.entries[e.id] = e;
     const inc = e.kind === 'income';
     return html`<div class="row click ${inc ? 'posi' : 'neg'}" data-act="edit-entry" data-id="${e.id}" tabindex="0">
-      <div class="main"><b>${e.party || e.client_name || e.category}</b><span>${[fmtDate(e.date), e.category, e.method, e.note].filter(Boolean).join(' · ')}</span></div>
+      <div class="main"><b>${e.party || e.client_name || e.category}</b><span>${[fmtDate(e.date), e.category, e.project_name, e.method, e.note].filter(Boolean).join(' · ')}</span></div>
       ${pill(inc ? 'paid' : 'overdue', inc ? 'income' : 'expense')}
       <div class="amt">${inc ? '' : '−'}${money(e.amount_cents)}</div></div>`;
   }
@@ -473,8 +506,8 @@
     return html`
       <div class="head"><div><h1>Books</h1><div class="sub">Cash, checks, Zelle and every expense. Card payments through Stripe are counted automatically in Reports.</div></div>
         <div class="acts"><button class="btn ghost" data-act="export-books">${raw(ICON.down)}Excel</button>
-          <button class="btn ghost" data-act="new-entry" data-kind="income">${raw(ICON.plus)}Income</button>
-          <button class="btn" data-act="new-entry" data-kind="expense">${raw(ICON.plus)}Expense</button></div></div>
+          ${can('books', 'edit') ? html`<button class="btn ghost" data-act="new-entry" data-kind="income">${raw(ICON.plus)}Income</button>
+          <button class="btn" data-act="new-entry" data-kind="expense">${raw(ICON.plus)}Expense</button>` : ''}</div></div>
       ${periodBar(books, 'bk')}
       <div class="kpis three">
         ${kpi('Recorded income', money(inc), fmtDate(r.from) + ' – ' + fmtDate(r.to), 'pos')}
@@ -525,6 +558,7 @@
         <div class="panel tablewrap"><table class="t"><thead><tr><th>Month</th><th class="n">Card (net)</th><th class="n">Other income</th><th class="n">Expenses</th><th class="n">Profit</th></tr></thead>
           <tbody>${d.months.length ? d.months.map((m) => html`<tr><td>${new Date(m.month + '-15T12:00:00').toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</td><td class="n">${money(m.stripe)}</td><td class="n">${money(m.income)}</td><td class="n">${money(m.expenses)}</td><td class="n">${money(m.profit)}</td></tr>`) : html`<tr><td colspan="5" class="muted">No activity in these dates.</td></tr>`}</tbody></table></div>
       </div>
+      ${on('f_bills') && d.bills && d.bills.owed ? html`<p class="hint" style="margin-top:14px">Not in this report yet: <b>${money(d.bills.owed)}</b> in supplier bills still to pay (they count as expenses when you pay them). <a href="#/bills">See bills</a></p>` : ''}
       <p class="hint" style="margin-top:14px">For your accountant: card income is shown after Stripe fees. This is a simple summary, not tax advice.</p>`;
   };
 
@@ -545,6 +579,10 @@
         ${sw('f_cards', 'Cards on file', '"Save card" links and charging a saved card')}
         ${sw('f_plans', 'Payment plans', 'Weekly or monthly payments')}
         ${sw('f_books', 'Books', 'Cash, checks, Zelle and expenses')}
+        ${sw('f_bills', 'Bills', 'What you owe suppliers, due dates, paying in parts')}
+        ${sw('f_projects', 'Projects', 'Projects with tasks, status, updates and costs')}
+        ${sw('f_time', 'Hours', 'Log hours on projects; hourly workers are paid by them')}
+        ${sw('f_team', 'Team', 'Workers, their pay, and what they may see')}
         ${sw('f_reports', 'Reports', 'Profit and loss, Excel downloads')}
         ${sw('f_discounts', 'Discounts on invoices', '% or $ off')}
         ${sw('f_fields', 'Project and PO number on invoices', '')}
@@ -585,7 +623,14 @@
         ${sw('alert_failed', 'A payment failed or a dispute opened', '', true)}
         ${sw('alert_card', 'A client saved a card', '', true)}
         ${sw('alert_lead', 'New website message', 'Off by default: the website form already emails you', true)}
+        ${sw('alert_bills', 'A supplier bill is due soon or late', '3 days before the due date, and once when it is late', true)}
       </div>
+
+      <h2 class="sec">Team sign-in</h2>
+      <div class="panel">
+        ${sw('team_login', 'Let team members sign in', 'Each person signs in with their own email and password and sees only what you allow. Set it per person under Team.')}
+      </div>
+      <p class="hint">Off = only you can sign in, even if a person has a password. Turning it off signs everyone else out.</p>
       <p class="hint">The bell in the admin always shows these, even without email.</p>
 
       <h2 class="sec">New invoices start with</h2>
@@ -680,9 +725,9 @@
     return html`<select id="${name}">${cards.map((k) => html`<option value="${k.id}">${k.brand} •••• ${k.last4} (exp ${k.exp})</option>`)}</select>`;
   }
 
-  async function invoiceForm(clientId) {
+  async function invoiceForm(clientId, projectId) {
     const m = modal('New invoice', html`<div class="fields">
-      ${await clientField(clientId)}
+      ${await clientField(clientId)}${projPick()}
       <div><label>What is it for?</label><div class="lines" id="lines"></div>
         <button type="button" class="linkbtn" data-add-line style="margin-top:8px">+ Add a line</button></div>
       <div class="grid2"><div><label for="f-due">Due</label><select id="f-due"><option value="0">On receipt</option><option value="7" selected>In 7 days</option><option value="14">In 14 days</option><option value="30">In 30 days</option></select></div>
@@ -743,6 +788,7 @@
     $('[data-add-line]', m.d).addEventListener('click', () => { addLine(); linesBox.lastElementChild.querySelector('input').focus(); });
     let cards = [];
     const sel = $('#f-client', m.d);
+    wireProject(m, projectId);
     const setMode = () => {
       const mode = (m.form.querySelector('input[name=mode]:checked') || {}).value;
       $('#f-cardpick', m.d).classList.toggle('hide', mode !== 'charge' || cards.length < 2);
@@ -784,7 +830,7 @@
         try {
           const pm = $('#f-card', m.d);
           const r = await api('invoices.create', { client_id: Number(sel.value), items, due_days: Number($('#f-due', m.d).value), memo: $('#f-memo', m.d).value, mode, pm_id: pm ? pm.value : '',
-            discount: disc.send, bank: chk('#f-bank'), remind: chk('#f-remind'), project: val('#f-project'), po: val('#f-po'), cc: val('#f-cc') });
+            discount: disc.send, bank: chk('#f-bank'), remind: chk('#f-remind'), project: val('#f-project'), po: val('#f-po'), cc: val('#f-cc'), project_id: projVal(m) });
           m.close();
           if (mode === 'link' && r.invoice.url) shareLink('Pay link ready', r.invoice.url, r.invoice, 'invoice');
           else toast(mode === 'email' ? 'Invoice emailed' : mode === 'charge' ? 'Card charged, invoice paid' : 'Draft saved');
@@ -812,14 +858,15 @@
     $('[data-copy]', m.d).addEventListener('click', () => copy(url));
   }
 
-  async function chargeForm(clientId) {
+  async function chargeForm(clientId, projectId) {
     const m = modal('Charge a card', html`<div class="fields">
-      ${await clientField(clientId)}
+      ${await clientField(clientId)}${projPick()}
       <div id="ch-card"></div>
       <div class="grid2"><div><label for="ch-amt">Amount</label><input id="ch-amt" inputmode="decimal" placeholder="0.00"></div>
         <div><label for="ch-desc">For</label><input id="ch-desc" maxlength="300" placeholder="What is it for?"></div></div>
     </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit" id="ch-go">Charge</button>`);
     const sel = $('#f-client', m.d);
+    wireProject(m, projectId);
     let cards = [];
     const load = async () => {
       cards = [];
@@ -843,16 +890,16 @@
       if (!confirm(`Charge ${money(c)} to ${$('#f-card', m.d).selectedOptions[0].textContent}?`)) return;
       await busy($('#ch-go', m.d), async () => {
         try {
-          const r = await api('charges.create', { client_id: Number(sel.value), pm_id: $('#f-card', m.d).value, amount_cents: c, description: $('#ch-desc', m.d).value });
+          const r = await api('charges.create', { client_id: Number(sel.value), pm_id: $('#f-card', m.d).value, amount_cents: c, description: $('#ch-desc', m.d).value, project_id: projVal(m) });
           m.close(); toast(r.ok ? 'Charged ' + money(c) : 'Charge is processing'); refresh();
         } catch (err) { m.err(err.message); }
       });
     });
   }
 
-  async function planForm(clientId) {
+  async function planForm(clientId, projectId) {
     const m = modal('New payment plan', html`<div class="fields">
-      ${await clientField(clientId)}
+      ${await clientField(clientId)}${projPick()}
       <div><label for="p-title">Name of the plan</label><input id="p-title" maxlength="120" placeholder="e.g. Website project"></div>
       <div class="grid2"><div><label for="p-total">Total amount</label><input id="p-total" inputmode="decimal" placeholder="0.00"></div>
         <div><label for="p-count">Number of payments</label><input id="p-count" inputmode="numeric" value="6"></div></div>
@@ -866,6 +913,7 @@
     </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit" id="p-go">Start plan</button>`);
     let every = 'month', cards = [], mail = '';
     const sel = $('#f-client', m.d);
+    wireProject(m, projectId);
     const preview = () => {
       const t = parseMoney($('#p-total', m.d).value), n = parseInt($('#p-count', m.d).value, 10), s = $('#p-start', m.d).value;
       const box = $('#p-prev', m.d);
@@ -907,7 +955,7 @@
       await busy($('#p-go', m.d), async () => {
         try {
           const pm = $('#f-card', m.d);
-          await api('plans.create', { client_id: Number(sel.value), title: $('#p-title', m.d).value, total_cents: t, count: n, every, start_date: $('#p-start', m.d).value, autopay: how === 'auto', pm_id: pm ? pm.value : '' });
+          await api('plans.create', { client_id: Number(sel.value), title: $('#p-title', m.d).value, total_cents: t, count: n, every, start_date: $('#p-start', m.d).value, autopay: how === 'auto', pm_id: pm ? pm.value : '', project_id: projVal(m) });
           m.close(); toast('Payment plan started'); refresh();
         } catch (err) { m.err(err.message); }
       });
@@ -930,6 +978,7 @@
         <div><label for="e-method">Paid by</label><select id="e-method">${METHODS.map((x) => html`<option ${raw(e0.method === x ? 'selected' : '')}>${x}</option>`)}</select></div></div>
       <div><label for="e-party" id="e-party-l">${k === 'income' ? 'Received from' : 'Paid to'}</label><input id="e-party" maxlength="120" value="${e0.party || ''}"></div>
       <div><label for="e-client">Client (optional)</label><select id="e-client"><option value="">None</option>${(await clientsCache()).map((c) => html`<option value="${c.id}" ${raw(String(c.id) === String(e0.client_id) ? 'selected' : '')}>${c.name}${c.company ? ' · ' + c.company : ''}</option>`)}</select></div>
+      ${await projectField(e0.project_id, 'e-project')}
       <div><label for="e-note">Note</label><input id="e-note" maxlength="1000" value="${e0.note || ''}" placeholder="e.g. receipt #, what it was for"></div>
     </div>`, html`${id ? html`<button type="button" class="btn danger" id="e-del" style="margin-right:auto">Delete</button>` : ''}<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
     const fillCats = () => {
@@ -950,7 +999,8 @@
       await busy(m.form.querySelector('[type=submit]'), async () => {
         try {
           await api('entries.save', { id: id ? Number(id) : undefined, kind: k, date: $('#e-date', m.d).value, amount_cents: c, category: $('#e-cat', m.d).value,
-            party: $('#e-party', m.d).value, method: $('#e-method', m.d).value, client_id: $('#e-client', m.d).value ? Number($('#e-client', m.d).value) : null, note: $('#e-note', m.d).value });
+            party: $('#e-party', m.d).value, method: $('#e-method', m.d).value, client_id: $('#e-client', m.d).value ? Number($('#e-client', m.d).value) : null, note: $('#e-note', m.d).value,
+            project_id: $('#e-project', m.d) && $('#e-project', m.d).value ? Number($('#e-project', m.d).value) : null });
           m.close(); toast('Saved'); refresh();
         } catch (err) { m.err(err.message); }
       });
@@ -1015,6 +1065,663 @@
     });
   }
 
+  // ---------------------------------------------------------------- shared pickers
+  async function projectsCache(force) {
+    if (!on('f_projects') || (member() && perms().projects === 'none')) return [];
+    if (!state.projects || force) state.projects = (await api('projects.list')).projects;
+    return state.projects;
+  }
+  async function teamCache(force) {
+    if (!state.team || force) state.team = (await api('team.names')).workers;
+    return state.team;
+  }
+  async function projectField(sel, id = 'f-project') {
+    const list = await projectsCache();
+    if (!list.length) return '';
+    return html`<div><label for="${id}">Project (optional)</label><select id="${id}"><option value="">None</option>${list.map((p) => html`<option value="${p.id}" ${raw(String(p.id) === String(sel) ? 'selected' : '')}>${p.name}</option>`)}</select></div>`;
+  }
+  // project picker on invoice, card charge and payment plan forms: follows the client, picks their only open project by itself
+  const projPick = () => on('f_projects') && !(member() && perms().projects === 'none')
+    ? html`<div id="f-projbox" class="hide"><label for="f-proj">Project</label><select id="f-proj"></select><div class="hint">The money shows up on the project by itself.</div></div>` : '';
+  async function wireProject(m, presetId) {
+    const box = $('#f-projbox', m.d); if (!box) return;
+    let list = [];
+    try { list = await projectsCache(); } catch (e) { return; }
+    const sel = $('#f-client', m.d);
+    const fill = () => {
+      const cid = Number(sel.value);
+      const mine = list.filter((p) => (cid && p.client_id === cid) || String(p.id) === String(presetId));
+      const open = mine.filter((p) => p.status !== 'done');
+      if (!mine.length) { box.classList.add('hide'); $('#f-proj', m.d).innerHTML = ''; return; }
+      const pick = presetId || (open.length === 1 ? open[0].id : '');
+      $('#f-proj', m.d).innerHTML = html`<option value="">No project</option>${mine.map((p) => html`<option value="${p.id}" ${raw(String(p.id) === String(pick) ? 'selected' : '')}>${p.name}${p.status === 'done' ? ' (done)' : ''}</option>`)}`.s;
+      box.classList.remove('hide');
+    };
+    sel.addEventListener('change', () => { presetId = null; fill(); });
+    fill();
+  }
+  const projVal = (m) => { const el = $('#f-proj', m.d); return el && el.value ? Number(el.value) : null; };
+  const hrs = (min) => { const h = (min || 0) / 60; return (Math.round(h * 100) / 100).toLocaleString('en-US') + ' h'; };
+  // "1.5", "1:30", "90m" → minutes
+  function parseHours(s) {
+    const t = String(s || '').trim().toLowerCase();
+    let m = t.match(/^(\d{1,2}):([0-5]\d)$/);
+    if (m) return Number(m[1]) * 60 + Number(m[2]);
+    m = t.match(/^(\d{1,4})\s*m(in)?$/);
+    if (m) return Number(m[1]);
+    m = t.match(/^(\d{1,2}(\.\d{1,2})?|\.\d{1,2})\s*h?$/);
+    if (m) return Math.round(parseFloat(m[1]) * 60);
+    return NaN;
+  }
+  const payLabel = (type, rate) => type === 'project' ? (rate ? money(rate) + ' for the project' : 'per project') : (rate ? money(rate) + '/hr' : 'hourly');
+  const METHODS_PAY = ['Zelle', 'Bank transfer', 'Check', 'Cash', 'Card', 'Other'];
+
+  // ---------------------------------------------------------------- bills
+  let billFilter = 'unpaid';
+  const BILL_LABEL = { open: 'unpaid', partial: 'part paid', overdue: 'late', paid: 'paid' };
+  function billRow(b) {
+    state.bills[b.id] = b;
+    const sub = [b.number ? '#' + b.number : '', b.due_date ? (b.status === 'paid' ? 'was due ' : 'due ') + fmtDate(b.due_date) : 'no due date', b.category, b.project_name, b.client_name].filter(Boolean).join(' · ');
+    return html`<div class="row click" data-act="edit-bill" data-id="${b.id}" tabindex="0">
+      <div class="main"><b>${b.vendor}</b><span>${sub}</span></div>
+      ${pill(b.status === 'partial' ? 'partial' : b.status, BILL_LABEL[b.status])}
+      <div class="amt">${money(b.left_cents || b.amount_cents)}<small>${b.status === 'paid' ? 'paid' : b.paid_cents ? 'left of ' + money(b.amount_cents) : fmtDate(b.bill_date)}</small></div>
+      ${b.left_cents && can('bills', 'edit') ? html`<div class="acts"><button class="btn sm" data-act="pay-bill" data-id="${b.id}">Pay</button></div>` : ''}
+    </div>`;
+  }
+  VIEWS.bills = async () => {
+    const d = await api('bills.list');
+    state.billList = d.bills;
+    const t = d.totals;
+    return html`
+      <div class="head"><div><h1>Bills</h1><div class="sub">What you owe suppliers. Paying a bill puts the expense in your books.</div></div>
+        <div class="acts"><button class="btn ghost" data-act="export-bills">${raw(ICON.down)}Excel</button>
+          ${can('bills', 'edit') ? html`<button class="btn" data-act="new-bill">${raw(ICON.plus)}New bill</button>` : ''}</div></div>
+      <div class="kpis three">
+        ${kpi('Owed now', money(t.owed), t.open + ' unpaid bill' + (t.open === 1 ? '' : 's'))}
+        ${kpi('Late', money(t.late), t.lateCount + ' past the due date', t.lateCount ? 'neg' : '')}
+        ${kpi('Due in 7 days', money(t.week), t.weekCount + ' bill' + (t.weekCount === 1 ? '' : 's'))}
+      </div>
+      <div class="chips" style="margin-top:16px" id="bchips">${[['unpaid', 'Unpaid'], ['overdue', 'Late'], ['paid', 'Paid'], ['', 'All']].map(([v, l]) => html`<button type="button" data-bf="${v}" class="${billFilter === v ? 'on' : ''}">${l}</button>`)}</div>
+      <div class="panel rows" id="blist"></div>`;
+  };
+  function drawBills() {
+    const box = $('#blist'); if (!box) return;
+    const list = (state.billList || []).filter((b) => !billFilter || (billFilter === 'unpaid' ? b.left_cents > 0 : b.status === billFilter));
+    box.innerHTML = (list.length ? html`${list.map(billRow)}` : empty(billFilter === 'unpaid' ? 'Nothing to pay. Every bill is paid.' : 'No bills here.')).s;
+  }
+
+  async function billForm(id) {
+    let b = { bill_date: today(), category: 'Hardware & inventory' }, payments = [];
+    if (id) { const r = await api('bills.get', { id: Number(id) }); b = r.bill; payments = r.payments; }
+    const edit = can('bills', 'edit');
+    const cats = CATS.expense.includes(b.category) ? CATS.expense : CATS.expense.concat([b.category]);
+    const m = modal(id ? 'Bill from ' + b.vendor : 'New bill', html`<div class="fields">
+      <div class="grid2"><div><label for="b-vendor">Supplier</label><input id="b-vendor" value="${b.vendor || ''}" maxlength="120" required placeholder="Who sent the bill"></div>
+        <div><label for="b-num">Their bill / invoice #</label><input id="b-num" value="${b.number || ''}" maxlength="60"></div></div>
+      <div class="grid2"><div><label for="b-amt">Amount</label><input id="b-amt" inputmode="decimal" placeholder="0.00" value="${b.amount_cents ? plain(b.amount_cents) : ''}"></div>
+        <div><label for="b-cat">Category</label><select id="b-cat">${cats.map((x) => html`<option ${raw(b.category === x ? 'selected' : '')}>${x}</option>`)}</select></div></div>
+      <div class="grid2"><div><label for="b-date">Bill date</label><input id="b-date" type="date" value="${b.bill_date}"></div>
+        <div><label for="b-due">Due date</label><input id="b-due" type="date" value="${b.due_date || ''}"></div></div>
+      ${await projectField(b.project_id, 'b-project')}
+      ${can('clients') ? html`<div><label for="b-client">For a client (optional)</label><select id="b-client"><option value="">None</option>${(await clientsCache()).map((c) => html`<option value="${c.id}" ${raw(String(c.id) === String(b.client_id) ? 'selected' : '')}>${c.name}${c.company ? ' · ' + c.company : ''}</option>`)}</select></div>` : ''}
+      <div><label for="b-note">Note</label><input id="b-note" maxlength="1000" value="${b.note || ''}" placeholder="e.g. 30% deposit now, rest on shipping"></div>
+      ${id ? html`<div><label>Payments</label><div class="panel rows flat">${payments.length ? payments.map((p) => html`<div class="row"><div class="main"><b>${money(p.amount_cents)}</b><span>${[fmtDate(p.date), p.method, p.note].filter(Boolean).join(' · ')}</span></div><span></span>
+          ${edit ? html`<button type="button" class="linkbtn" data-act="bill-unpay" data-id="${p.id}">Remove</button>` : html`<span></span>`}</div>`) : empty('Nothing paid yet.')}</div>
+        <div class="hint">${money(b.paid_cents)} paid · ${money(b.left_cents)} left</div></div>` : ''}
+    </div>`, html`${id && edit ? html`<button type="button" class="btn danger" id="b-del" style="margin-right:auto">Delete</button>` : ''}
+      ${id && edit && b.left_cents ? html`<button type="button" class="btn ghost" id="b-pay">Pay</button>` : ''}
+      <button type="button" class="btn ghost" data-close>${edit ? 'Cancel' : 'Close'}</button>${edit ? html`<button class="btn" type="submit">Save</button>` : ''}`);
+    if (!edit) $$('input,select', m.d).forEach((x) => { x.disabled = true; });
+    if (id && edit) {
+      $('#b-del', m.d).addEventListener('click', async () => {
+        if (!confirm('Delete this bill? Payments you already made stay in your books.')) return;
+        try { await api('bills.delete', { id: Number(id) }); m.close(); toast('Bill deleted'); refresh(); } catch (err) { m.err(err.message); }
+      });
+      const pb = $('#b-pay', m.d); if (pb) pb.addEventListener('click', () => { m.close(); payBillForm(b); });
+      m.d.addEventListener('click', async (ev) => {
+        const x = ev.target.closest('[data-act="bill-unpay"]'); if (!x) return;
+        ev.stopPropagation();
+        if (!confirm('Remove this payment? It is also taken out of your books.')) return;
+        try { await api('entries.delete', { id: Number(x.dataset.id) }); m.close(); toast('Payment removed'); refresh(); } catch (err) { m.err(err.message); }
+      });
+    }
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      const c = parseMoney($('#b-amt', m.d).value);
+      if (isNaN(c) || c <= 0) return m.err('Enter the amount, like 1250.00');
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try {
+          const r = await api('bills.save', { id: id ? Number(id) : undefined, vendor: $('#b-vendor', m.d).value, number: $('#b-num', m.d).value, amount_cents: c,
+            category: $('#b-cat', m.d).value, bill_date: $('#b-date', m.d).value, due_date: $('#b-due', m.d).value,
+            project_id: $('#b-project', m.d) && $('#b-project', m.d).value ? Number($('#b-project', m.d).value) : null,
+            client_id: $('#b-client', m.d) && $('#b-client', m.d).value ? Number($('#b-client', m.d).value) : null, note: $('#b-note', m.d).value });
+          m.close(); toast(id ? 'Saved' : 'Bill added'); refresh();
+          return r;
+        } catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  function payBillForm(b) {
+    const m = modal('Pay bill', html`<div class="fields"><p class="soft">${b.vendor}${b.number ? ' · #' + b.number : ''} · ${money(b.left_cents)} left to pay</p>
+      <div class="grid2"><div><label for="pb-a">Amount</label><input id="pb-a" inputmode="decimal" value="${plain(b.left_cents)}"></div>
+        <div><label for="pb-d">Date paid</label><input id="pb-d" type="date" value="${today()}"></div></div>
+      <div><label for="pb-m">Paid by</label><select id="pb-m">${METHODS_PAY.map((x) => html`<option ${raw(x === 'Bank transfer' ? 'selected' : '')}>${x}</option>`)}</select></div>
+      <div><label for="pb-n">Note</label><input id="pb-n" maxlength="1000" placeholder="e.g. wire confirmation #"></div>
+      <p class="hint">Paying less than the full amount is fine: the rest stays open on the bill.</p></div>`,
+    html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Record payment</button>`);
+    m.form.addEventListener('submit', async (e) => {
+      e.preventDefault(); m.err('');
+      const c = parseMoney($('#pb-a', m.d).value);
+      if (isNaN(c) || c <= 0 || c > b.left_cents) return m.err('Enter an amount up to ' + money(b.left_cents));
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try { await api('bills.pay', { id: b.id, amount_cents: c, date: $('#pb-d', m.d).value, method: $('#pb-m', m.d).value, note: $('#pb-n', m.d).value }); m.close(); toast('Payment recorded'); refresh(); }
+        catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- projects
+  const PSTATUS = [['planned', 'Planned'], ['active', 'Active'], ['on_hold', 'On hold'], ['done', 'Done']];
+  const PLABEL = Object.fromEntries(PSTATUS);
+  const TSTATUS = { todo: 'To do', doing: 'Doing', done: 'Done' };
+  let projFilter = 'open';
+  function projectRow(p) {
+    const pct = p.tasks_total ? Math.round((p.tasks_done / p.tasks_total) * 100) : 0;
+    const late = p.due_date && p.status !== 'done' && p.due_date < today();
+    const sub = [p.client_name, p.team, p.due_date ? (late ? 'was due ' : 'due ') + fmtDate(p.due_date) : ''].filter(Boolean).join(' · ');
+    const amt = p.budget_cents != null && p.budget_cents ? html`${money(p.spent)}<small>spent of ${money(p.budget_cents)}</small>`
+      : p.spent != null ? html`${money(p.spent)}<small>spent</small>` : p.minutes != null ? html`${hrs(p.minutes)}<small>logged</small>` : '';
+    return html`<a class="row" href="#/projects/${p.id}">
+      <div class="main"><b>${p.name}</b><span>${sub || 'No team yet'}</span></div>
+      ${pill(late ? 'overdue' : p.status, late ? 'late' : PLABEL[p.status])}
+      <div class="amt">${amt}</div>
+      <div class="acts" style="align-items:center"><div class="progress grow"><i data-w="${pct}"></i></div><small class="muted">${p.tasks_done} of ${p.tasks_total} tasks</small></div>
+    </a>`;
+  }
+  VIEWS.projects = async (arg) => {
+    if (arg) return projectPage(arg);
+    const list = await projectsCache(true);
+    const open = list.filter((p) => p.status !== 'done');
+    return html`
+      <div class="head"><div><h1>Projects</h1><div class="sub">${open.length} open · ${list.filter((p) => p.status === 'active').length} active</div></div>
+        <div class="acts">${!member() ? html`<button class="btn" data-act="new-project">${raw(ICON.plus)}New project</button>` : ''}</div></div>
+      <div class="chips" id="pchips">${[['open', 'Open'], ['active', 'Active'], ['planned', 'Planned'], ['on_hold', 'On hold'], ['done', 'Done'], ['', 'All']].map(([v, l]) => html`<button type="button" data-pf="${v}" class="${projFilter === v ? 'on' : ''}">${l}</button>`)}</div>
+      <div class="panel rows" id="plist"></div>`;
+  };
+  function drawProjects() {
+    const box = $('#plist'); if (!box) return;
+    const list = (state.projects || []).filter((p) => !projFilter || (projFilter === 'open' ? p.status !== 'done' : p.status === projFilter));
+    box.innerHTML = (list.length ? html`${list.map(projectRow)}` : empty(member() ? 'No projects here.' : 'No projects here. Start one with "New project".')).s;
+    paintBars(box);
+  }
+
+  function taskRow(t, c) {
+    state.tasks[t.id] = t;
+    const mine = member() && t.worker_id === state.me.id;
+    const canMove = c.tasks === 'all' || (c.tasks === 'own' && mine);
+    const late = t.due_date && t.status !== 'done' && t.due_date < today();
+    return html`<div class="row task ${t.status === 'done' ? 'done' : ''}">
+      ${canMove ? html`<button type="button" class="tick" data-act="task-next" data-id="${t.id}" aria-label="Move to next step" title="${t.status === 'todo' ? 'Start' : t.status === 'doing' ? 'Mark done' : 'Open again'}">${raw(t.status === 'done' ? ICON.ok : t.status === 'doing' ? ICON.clock : '')}</button>` : html`<span class="tick ro">${raw(t.status === 'done' ? ICON.ok : '')}</span>`}
+      <div class="main ${c.tasks === 'all' ? 'click' : ''}" ${raw(c.tasks === 'all' ? `data-act="edit-task" data-id="${t.id}"` : '')}><b>${t.title}</b><span>${[t.worker_name || 'Not assigned', t.due_date ? (late ? 'late, was due ' : 'due ') + fmtDate(t.due_date) : '', t.note].filter(Boolean).join(' · ')}</span></div>
+      ${pill(late ? 'overdue' : 't-' + t.status, late ? 'late' : TSTATUS[t.status])}
+    </div>`;
+  }
+  async function projectPage(id) {
+    const d = await api('projects.get', { id: Number(id) });
+    state.proj = d;
+    const p = d.project, c = d.can, mny = d.money;
+    const late = p.due_date && p.status !== 'done' && p.due_date < today();
+    const done = d.tasks.filter((t) => t.status === 'done').length;
+    const pct = d.tasks.length ? Math.round((done / d.tasks.length) * 100) : 0;
+    const line = (l, v, cls) => html`<div class="l ${cls || ''}"><span>${l}</span><span class="num">${v}</span></div>`;
+    const myLogs = d.logs;
+    const totalMin = myLogs.reduce((s, l) => s + l.minutes, 0);
+    return html`
+      <div class="head"><div>
+          <div class="muted"><a href="#/projects" class="muted">← Projects</a></div>
+          <h1>${p.name} ${pill(late ? 'overdue' : p.status, late ? 'late' : PLABEL[p.status])}</h1>
+          <div class="sub">${[d.client ? d.client.name + (d.client.company ? ' · ' + d.client.company : '') : '', p.start_date ? 'started ' + fmtDate(p.start_date) : '', p.due_date ? 'due ' + fmtDate(p.due_date) : ''].filter(Boolean).join(' · ')}</div>
+        </div>
+        <div class="acts">
+          ${c.time ? html`<button class="btn" data-act="log-time" data-project="${p.id}">${raw(ICON.clock)}Log hours</button>` : ''}
+          ${c.edit ? html`<button class="btn ghost" data-act="edit-project" data-id="${p.id}">Edit</button>` : ''}
+        </div></div>
+      <div class="kpis ${mny ? '' : 'three'}">
+        ${kpi('Progress', pct + '%', `${done} of ${d.tasks.length} tasks done`)}
+        ${mny ? kpi('Money in', money(mny.in.total), mny.in.expected ? money(mny.in.expected) + ' still to come' : 'nothing waiting', 'pos')
+          : kpi(member() ? 'Your hours' : 'Hours', hrs(totalMin))}
+        ${mny ? kpi('Money out', money(mny.out.total), mny.out.expected ? money(mny.out.expected) + ' still to pay' : 'nothing left to pay', 'neg') : ''}
+        ${mny ? kpi('Profit so far', money(mny.profitNow), 'when all is paid: ' + money(mny.profitEnd), mny.profitEnd >= 0 ? 'pos' : 'neg')
+          : d.myPay ? kpi('Your pay', money(d.myPay.owed), money(d.myPay.paid) + ' paid of ' + money(d.myPay.earned) + ' earned') : ''}
+      </div>
+      ${mny ? moneyPanels(d) : ''}
+      <div class="cols" style="margin-top:8px">
+        <div>
+          <h2 class="sec">Tasks ${d.tasks.length ? html`<span class="muted">${done}/${d.tasks.length}</span>` : ''}</h2>
+          <div class="panel">
+            ${c.tasks === 'all' || c.tasks === 'own' ? html`<form class="addnote" id="taskform" data-project="${p.id}"><input id="tasknew" placeholder="${c.tasks === 'all' ? 'Add a task…' : 'Add a task for yourself…'}" maxlength="200"><button class="btn sm" type="submit">Add</button></form>` : ''}
+            <div class="rows">${c.tasks === 'none' ? empty('Tasks are hidden for you.') : d.tasks.length ? d.tasks.map((t) => taskRow(t, c)) : empty('No tasks yet.')}</div>
+          </div>
+          ${myLogs.length || c.time ? html`<h2 class="sec">Hours <span class="muted">${hrs(totalMin)}</span></h2>
+          <div class="panel rows">${myLogs.length ? myLogs.map((l) => { state.logs[l.id] = l; const own = !member() || l.worker_id === state.me.id;
+            return html`<div class="row ${own ? 'click' : ''}" ${raw(own ? `data-act="edit-time" data-id="${l.id}" tabindex="0"` : '')}><div class="main"><b>${l.worker_name}</b><span>${[fmtDate(l.date), l.note].filter(Boolean).join(' · ')}</span></div><span></span><div class="amt">${hrs(l.minutes)}</div></div>`; }) : empty('No hours logged yet.')}</div>` : ''}
+        </div>
+        <div>
+          ${p.description ? html`<h2 class="sec">About</h2><div class="panel pad notes">${p.description}</div>` : ''}
+          <h2 class="sec">Team</h2>
+          <div class="panel rows">${d.team.length ? d.team.map((w) => {
+            const pay = mny && mny.byWorker[w.worker_id];
+            return html`<div class="row"><div class="main"><b>${w.name}${w.active ? '' : ' (not active)'}</b><span>${[w.title, w.pay_type ? payLabel(w.pay_type, w.rate_cents) : '', pay ? hrs(pay.minutes) : ''].filter(Boolean).join(' · ')}</span></div>
+              <span></span><div class="amt">${pay ? html`${money(pay.owed)}<small>owed · ${money(pay.paid)} paid</small>` : ''}</div>
+              ${c.pay && (!member() || mny) ? html`<div class="acts"><button class="btn ghost sm" data-act="pay-worker" data-worker="${w.worker_id}" data-project="${p.id}">Pay ${w.name.split(' ')[0]}</button></div>` : ''}</div>`;
+          }) : empty(c.team ? 'Nobody on this project yet. Add people with Edit.' : 'No team yet.')}</div>
+          <h2 class="sec">Updates</h2>
+          <div class="panel feed">
+            ${c.notes ? html`<form class="addnote" id="pnoteform" data-project="${p.id}"><input id="pnote" placeholder="Where things stand, a problem, what's next…" maxlength="2000"><button class="btn sm" type="submit">Post</button></form>` : ''}
+            <div class="rows">${d.notes.length ? d.notes.map((n) => html`<div class="row"><div class="main"><b>${n.body}</b><span>${n.author}</span></div><div class="amt"><small>${ago(n.created_at)}</small></div></div>`) : empty('No updates yet.')}</div>
+          </div>
+          ${!member() ? html`<p style="margin-top:28px"><button class="btn danger sm" data-act="delete-project" data-id="${p.id}">Delete project</button></p>` : ''}
+        </div>
+      </div>`;
+  }
+
+  // where the project's money came from, what is still to come, what went out and what is still to pay. All automatic.
+  function moneyPanels(d) {
+    const mny = d.money, p = d.project, c = d.can;
+    const canInv = can('invoices', 'edit');
+    const due = (x) => x.due ? (x.late ? 'late, was due ' : 'due ') + fmtDate(x.due) : '';
+    const r = (main, sub, amt, cls, act) => html`<div class="row ${cls || ''}"><div class="main"><b>${main}</b><span>${sub}</span></div><span></span><div class="amt">${amt}</div>${act ? html`<div class="acts">${act}</div>` : ''}</div>`;
+    const grp = (title, total) => html`<div class="mgrp"><span>${title}</span><b class="num">${money(total)}</b></div>`;
+    const inRec = mny.in.received.map((x) => r(x.from, [fmtDate(x.date), x.how, x.note].filter(Boolean).join(' · '), money(x.amount), 'posi'));
+    const inCome = mny.in.coming.map((x) => r(x.from, [x.what, due(x)].filter(Boolean).join(' · '), money(x.amount), x.late ? 'neg' : '',
+      x.notInvoiced && canInv && d.client ? html`<button class="btn sm" data-act="new-invoice" data-client="${d.client.id}" data-project="${p.id}">Invoice it</button>`
+        : x.url ? html`<a class="btn ghost sm" href="${safeUrl(x.url)}" target="_blank" rel="noopener">Pay link</a>` : ''));
+    const outPaid = mny.out.paid.map((x) => r(x.to, [fmtDate(x.date), x.what, x.how].filter(Boolean).join(' · '), money(x.amount), 'neg'));
+    const outTo = mny.out.toPay.map((x) => r(x.to, [x.what, due(x)].filter(Boolean).join(' · '), money(x.amount), x.late ? 'neg' : '',
+      x.bill && can('bills', 'edit') ? html`<button class="btn sm" data-act="pay-bill-id" data-id="${x.bill}">Pay</button>`
+        : x.worker && c.pay ? html`<button class="btn sm" data-act="pay-worker" data-worker="${x.worker}" data-project="${p.id}">Pay</button>` : ''));
+    const used = p.budget_cents ? Math.round((mny.cost / p.budget_cents) * 100) : 0;
+    return html`
+      ${mny.stripeOk ? '' : html`<div class="banner" style="margin-top:14px">Could not reach Stripe just now, so online payments may be missing below. Refresh in a minute.</div>`}
+      <div class="cols money" style="margin-top:8px">
+        <div><h2 class="sec">Money in</h2>
+          <div class="panel rows">
+            ${grp('Came in', mny.in.total)}${inRec.length ? inRec : empty('Nothing yet.')}
+            ${grp('Still to come', mny.in.expected)}${inCome.length ? inCome : empty(mny.price ? 'Nothing left. All paid.' : 'Nothing waiting.')}
+          </div>
+          ${canInv && d.client ? html`<div class="addacts"><button class="btn ghost sm" data-act="new-invoice" data-client="${d.client.id}" data-project="${p.id}">${raw(ICON.invoice)}New invoice</button>
+            <button class="btn ghost sm" data-act="link-invoices" data-id="${p.id}" data-client="${d.client.id}">Add an invoice made before</button></div>` : ''}
+          <p class="hint">${mny.price ? `Price to the client: ${money(mny.price)}. ` : 'Set the price on the project (Edit) to see what is not invoiced yet. '}Invoices, card charges and payment plans for this project, and income tagged with it in Books, show here by themselves.</p>
+        </div>
+        <div><h2 class="sec">Money out</h2>
+          <div class="panel rows">
+            ${grp('Paid', mny.out.total)}${outPaid.length ? outPaid : empty('Nothing yet.')}
+            ${grp('Still to pay', mny.out.expected)}${outTo.length ? outTo : empty('Nothing to pay.')}
+          </div>
+          ${p.budget_cents ? html`<div class="panel pad" style="margin-top:10px"><div class="progress"><i data-w="${Math.min(100, used)}"></i></div>
+            <div class="hint">${used}% of the ${money(p.budget_cents)} budget (paid and still to pay)</div></div>` : ''}
+          <p class="hint">Bills for this project, team pay from logged hours, and expenses tagged with it in Books show here by themselves.</p>
+        </div>
+      </div>`;
+  }
+
+  async function linkInvoicesForm(projectId, clientId) {
+    const all = (await api('invoices.list', {})).invoices.filter((i) => String(i.client_id) === String(clientId) && !i.project_id && i.status !== 'void');
+    if (!all.length) return toast('No other invoices for this client');
+    const m = modal('Add invoices to this project', html`<div class="fields"><div class="choices">${all.map((i) => html`<label class="choice"><input type="checkbox" value="${i.id}"><div><b>${i.number || 'Draft'} · ${money(i.total)}</b><span>${[fmtDate(i.created), i.status === 'open' ? (i.overdue ? 'late' : 'waiting') : i.status, i.lines.map((l) => l.description).join(', ')].filter(Boolean).join(' · ')}</span></div></label>`)}</div></div>`,
+      html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Add</button>`);
+    m.form.addEventListener('submit', async (e) => {
+      e.preventDefault(); m.err('');
+      const ids = $$('input:checked', m.d).map((x) => x.value);
+      if (!ids.length) return m.err('Pick at least one');
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try { for (const id of ids) await api('invoices.link', { id, project_id: Number(projectId) }); m.close(); toast('Added'); refresh(); }
+        catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  async function projectForm(id) {
+    let p = { status: 'active', start_date: today() }, team = [];
+    if (id) { const d = state.proj && String(state.proj.project.id) === String(id) ? state.proj : await api('projects.get', { id: Number(id) }); p = d.project; team = d.team; }
+    const owner = !member();
+    const showClient = owner || (perms().client_info && can('clients'));
+    const showBudget = owner || perms().money;
+    const workers = owner ? (await api('workers.list')).workers.filter((w) => w.active || team.some((t) => t.worker_id === w.id)) : [];
+    const onTeam = Object.fromEntries(team.map((t) => [t.worker_id, t]));
+    const m = modal(id ? 'Edit project' : 'New project', html`<div class="fields">
+      <div><label for="p-name">Project name</label><input id="p-name" value="${p.name || ''}" maxlength="120" required></div>
+      ${showClient ? await clientField(p.client_id, 'p-client') : ''}
+      <div><label for="p-status">Status</label><select id="p-status">${PSTATUS.map(([v, l]) => html`<option value="${v}" ${raw(p.status === v ? 'selected' : '')}>${l}</option>`)}</select></div>
+      ${showBudget ? html`<div class="grid2"><div><label for="p-price">Price to the client (optional)</label><input id="p-price" inputmode="decimal" placeholder="0.00" value="${p.price_cents ? plain(p.price_cents) : ''}"><div class="hint">Shows what is not invoiced yet</div></div>
+        <div><label for="p-budget">Budget for costs (optional)</label><input id="p-budget" inputmode="decimal" placeholder="0.00" value="${p.budget_cents ? plain(p.budget_cents) : ''}"><div class="hint">Warns when costs go over</div></div></div>` : ''}
+      <div class="grid2"><div><label for="p-start">Start</label><input id="p-start" type="date" value="${p.start_date || ''}"></div>
+        <div><label for="p-due">Due</label><input id="p-due" type="date" value="${p.due_date || ''}"></div></div>
+      <div><label for="p-desc">About the project</label><textarea id="p-desc" maxlength="4000" placeholder="What, for whom, what done looks like">${p.description || ''}</textarea></div>
+      ${owner ? html`<div><label>Team and pay on this project</label>
+        ${workers.length ? html`<div class="teampick">${workers.map((w) => { const t = onTeam[w.id]; const type = t ? t.pay_type : w.pay_type; const rate = t ? t.rate_cents : w.rate_cents;
+          return html`<div class="tp" data-w="${w.id}"><label class="ck"><input type="checkbox" ${raw(t ? 'checked' : '')}><span>${w.name}${w.title ? html` <small class="muted">${w.title}</small>` : ''}</span></label>
+            <select data-k="type"><option value="hourly" ${raw(type === 'hourly' ? 'selected' : '')}>Per hour</option><option value="project" ${raw(type === 'project' ? 'selected' : '')}>Fixed for project</option></select>
+            <input data-k="rate" inputmode="decimal" placeholder="0.00" value="${rate ? plain(rate) : ''}"></div>`; })}</div>
+          <div class="hint">Per hour: paid for the hours they log. Fixed: one agreed price for this project.</div>`
+        : html`<div class="hint">No team yet. Add people under <a href="#/team" data-close>Team</a> first.</div>`}</div>` : ''}
+    </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      let budget = null, price = null;
+      if (showBudget && $('#p-budget', m.d).value.trim()) { budget = parseMoney($('#p-budget', m.d).value); if (isNaN(budget)) return m.err('Budget should be a number, like 5000'); }
+      if (showBudget && $('#p-price', m.d).value.trim()) { price = parseMoney($('#p-price', m.d).value); if (isNaN(price)) return m.err('Price should be a number, like 12000'); }
+      let teamOut;
+      if (owner) {
+        teamOut = [];
+        for (const row of $$('.tp', m.d)) {
+          if (!row.querySelector('input[type=checkbox]').checked) continue;
+          const r = row.querySelector('[data-k=rate]').value.trim();
+          const rc = r ? parseMoney(r) : 0;
+          if (isNaN(rc)) return m.err('Check the pay amounts');
+          teamOut.push({ worker_id: Number(row.dataset.w), pay_type: row.querySelector('[data-k=type]').value, rate_cents: rc });
+        }
+      }
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try {
+          const args = { id: id ? Number(id) : undefined, name: $('#p-name', m.d).value, status: $('#p-status', m.d).value, start_date: $('#p-start', m.d).value, due_date: $('#p-due', m.d).value, description: $('#p-desc', m.d).value };
+          if (showClient) args.client_id = $('#p-client', m.d).value ? Number($('#p-client', m.d).value) : null;
+          if (showBudget) { args.budget_cents = budget; args.price_cents = price; }
+          if (owner) args.team = teamOut;
+          const r = await api('projects.save', args);
+          state.projects = null;
+          m.close(); toast(id ? 'Saved' : 'Project started');
+          if (!id) location.hash = '#/projects/' + r.id; else refresh();
+        } catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  async function taskForm(id) {
+    const t = state.tasks[id]; if (!t) return;
+    const team = await teamCache();
+    const m = modal('Task', html`<div class="fields">
+      <div><label for="t-title">Task</label><input id="t-title" value="${t.title}" maxlength="200"></div>
+      <div class="grid2"><div><label for="t-who">Who does it</label><select id="t-who"><option value="">Not assigned</option>${team.map((w) => html`<option value="${w.id}" ${raw(w.id === t.worker_id ? 'selected' : '')}>${w.name}</option>`)}</select></div>
+        <div><label for="t-status">Status</label><select id="t-status">${Object.entries(TSTATUS).map(([v, l]) => html`<option value="${v}" ${raw(t.status === v ? 'selected' : '')}>${l}</option>`)}</select></div></div>
+      <div><label for="t-due">Due</label><input id="t-due" type="date" value="${t.due_date || ''}"></div>
+      <div><label for="t-note">Note</label><input id="t-note" value="${t.note || ''}" maxlength="2000"></div>
+    </div>`, html`<button type="button" class="btn danger" id="t-del" style="margin-right:auto">Delete</button><button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    $('#t-del', m.d).addEventListener('click', async () => {
+      if (!confirm('Delete this task?')) return;
+      try { await api('tasks.delete', { id: t.id }); m.close(); toast('Task deleted'); refresh(); } catch (err) { m.err(err.message); }
+    });
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try {
+          await api('tasks.save', { id: t.id, title: $('#t-title', m.d).value, worker_id: $('#t-who', m.d).value ? Number($('#t-who', m.d).value) : null,
+            status: $('#t-status', m.d).value, due_date: $('#t-due', m.d).value, note: $('#t-note', m.d).value });
+          m.close(); toast('Saved'); refresh();
+        } catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  async function timeForm(projectId, logId) {
+    const l = logId ? state.logs[logId] : { date: today(), project_id: projectId };
+    const owner = !member();
+    const projects = projectId || logId ? [] : (await projectsCache()).filter((p) => p.status !== 'done');
+    if (!projectId && !logId && !projects.length) return toast('No open projects to log hours on', true);
+    const people = owner && !logId ? (state.proj && state.proj.project.id === Number(projectId) && state.proj.team.length ? state.proj.team.map((w) => ({ id: w.worker_id, name: w.name })) : await teamCache()) : [];
+    if (owner && !logId && !people.length) return toast('Add people under Team first', true);
+    const m = modal(logId ? 'Hours' : 'Log hours', html`<div class="fields">
+      ${projects.length ? html`<div><label for="h-proj">Project</label><select id="h-proj">${projects.map((p) => html`<option value="${p.id}">${p.name}</option>`)}</select></div>` : ''}
+      ${people.length ? html`<div><label for="h-who">Who worked</label><select id="h-who">${people.map((w) => html`<option value="${w.id}">${w.name}</option>`)}</select></div>` : ''}
+      <div class="grid2"><div><label for="h-h">Hours</label><input id="h-h" inputmode="decimal" placeholder="e.g. 2.5 or 2:30" value="${l.minutes ? String(Math.round((l.minutes / 60) * 100) / 100) : ''}"></div>
+        <div><label for="h-d">Date</label><input id="h-d" type="date" value="${l.date}"></div></div>
+      <div><label for="h-n">What was done</label><input id="h-n" maxlength="500" value="${l.note || ''}"></div>
+    </div>`, html`${logId ? html`<button type="button" class="btn danger" id="h-del" style="margin-right:auto">Delete</button>` : ''}<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    if (logId) $('#h-del', m.d).addEventListener('click', async () => {
+      if (!confirm('Delete these hours?')) return;
+      try { await api('time.delete', { id: Number(logId) }); m.close(); toast('Deleted'); refresh(); } catch (err) { m.err(err.message); }
+    });
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      const min = parseHours($('#h-h', m.d).value);
+      if (isNaN(min) || min < 1 || min > 1440) return m.err('Enter hours, like 2.5 or 2:30');
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try {
+          await api('time.save', { id: logId ? Number(logId) : undefined, project_id: projectId ? Number(projectId) : $('#h-proj', m.d) ? Number($('#h-proj', m.d).value) : undefined,
+            worker_id: $('#h-who', m.d) ? Number($('#h-who', m.d).value) : undefined, minutes: min, date: $('#h-d', m.d).value, note: $('#h-n', m.d).value });
+          m.close(); toast('Hours saved'); refresh();
+        } catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  function timeFormFor(workerId, projects) {
+    const m = modal('Log hours', html`<div class="fields">
+      <div><label for="hf-proj">Project</label><select id="hf-proj">${projects.map((p) => html`<option value="${p.id}">${p.name}</option>`)}</select></div>
+      <div class="grid2"><div><label for="hf-h">Hours</label><input id="hf-h" inputmode="decimal" placeholder="e.g. 2.5 or 2:30"></div>
+        <div><label for="hf-d">Date</label><input id="hf-d" type="date" value="${today()}"></div></div>
+      <div><label for="hf-n">What was done</label><input id="hf-n" maxlength="500"></div></div>`,
+    html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      const min = parseHours($('#hf-h', m.d).value);
+      if (isNaN(min) || min < 1 || min > 1440) return m.err('Enter hours, like 2.5 or 2:30');
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try { await api('time.save', { project_id: Number($('#hf-proj', m.d).value), worker_id: workerId, minutes: min, date: $('#hf-d', m.d).value, note: $('#hf-n', m.d).value });
+          delete state.workers[workerId]; m.close(); toast('Hours saved'); refresh(); }
+        catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- team
+  const ACCESS_LABEL = (w) => !w.login ? 'no sign-in' : 'can sign in';
+  VIEWS.team = async (arg) => {
+    if (arg) return workerPage(arg);
+    const d = await api('workers.list');
+    state.workerList = d.workers;
+    const loginOff = state.cfg && state.cfg.settings && !state.cfg.settings.team_login;
+    return html`
+      <div class="head"><div><h1>Team</h1><div class="sub">${d.workers.filter((w) => w.active).length} active · ${money(d.owed)} owed in pay</div></div>
+        <div class="acts"><button class="btn" data-act="new-worker">${raw(ICON.plus)}Add person</button></div></div>
+      ${loginOff && d.workers.some((w) => w.login) ? html`<div class="banner"><b>Team sign-in is off.</b> People with sign-in can't get in until you turn on "Let team members sign in" in <a href="#/settings">Settings</a>.</div>` : ''}
+      <div class="panel rows">${d.workers.length ? d.workers.map((w) => html`<a class="row" href="#/team/${w.id}">
+        <div class="main"><b>${w.name}${w.active ? '' : ' (not active)'}</b><span>${[w.title, payLabel(w.pay_type, w.rate_cents), w.projects ? w.projects + ' open project' + (w.projects === 1 ? '' : 's') : ''].filter(Boolean).join(' · ')}</span></div>
+        ${pill(w.login ? 'active' : 'draft', ACCESS_LABEL(w))}
+        <div class="amt">${money(w.pay.owed)}<small>owed · ${hrs(w.pay.minutes)}</small></div></a>`) : empty('Nobody yet. Add the people who work on your projects: workers, freelancers, a project manager, a bookkeeper.')}</div>
+      <p class="hint">Each person can get their own sign-in, and you choose exactly what they see and change.</p>`;
+  };
+
+  async function workerPage(id) {
+    const d = await api('workers.get', { id: Number(id) });
+    const w = d.worker;
+    state.workers[w.id] = d;
+    return html`
+      <div class="head"><div>
+          <div class="muted"><a href="#/team" class="muted">← Team</a></div>
+          <h1>${w.name} ${pill(w.login ? 'active' : 'draft', ACCESS_LABEL(w))}</h1>
+          <div class="sub">${[w.title, payLabel(w.pay_type, w.rate_cents) + ' by default'].filter(Boolean).join(' · ')}</div>
+          <div class="who">${w.email ? html`<a href="mailto:${w.email}">${w.email}</a>` : ''}${w.phone ? html`<a href="tel:${w.phone.replace(/[^\d+]/g, '')}">${w.phone}</a>` : ''}</div>
+        </div>
+        <div class="acts"><button class="btn" data-act="pay-worker" data-worker="${w.id}">${raw(ICON.dollar)}Pay</button>
+          <button class="btn ghost" data-act="log-time-for" data-worker="${w.id}">${raw(ICON.clock)}Log hours</button>
+          <button class="btn ghost" data-act="edit-worker" data-id="${w.id}">Edit and access</button></div></div>
+      <div class="kpis">
+        ${kpi('Hours', hrs(d.pay.minutes), 'all projects')}
+        ${kpi('Earned', money(d.pay.earned), 'hours × rate, plus fixed prices')}
+        ${kpi('Paid', money(d.pay.paid), d.payments.length + ' payment' + (d.payments.length === 1 ? '' : 's'))}
+        ${kpi('Owed', money(d.pay.owed), '', d.pay.owed ? 'neg' : 'pos')}
+      </div>
+      <div class="cols" style="margin-top:8px">
+        <div>
+          <h2 class="sec">Projects</h2>
+          <div class="panel rows">${d.projects.length ? d.projects.map((p) => html`<a class="row" href="#/projects/${p.id}"><div class="main"><b>${p.name}</b><span>${payLabel(p.pay_type, p.rate_cents)}</span></div>${pill(p.status, PLABEL[p.status])}<span></span></a>`) : empty('Not on any project yet.')}</div>
+          <h2 class="sec">Hours</h2>
+          <div class="panel rows">${d.logs.length ? d.logs.map((l) => { state.logs[l.id] = l; return html`<div class="row click" data-act="edit-time" data-id="${l.id}" tabindex="0"><div class="main"><b>${l.project_name}</b><span>${[fmtDate(l.date), l.note].filter(Boolean).join(' · ')}</span></div><span></span><div class="amt">${hrs(l.minutes)}</div></div>`; }) : empty('No hours logged.')}</div>
+        </div>
+        <div>
+          <h2 class="sec">Payments</h2>
+          <div class="panel rows">${d.payments.length ? d.payments.map((p) => html`<div class="row"><div class="main"><b>${money(p.amount_cents)}</b><span>${[fmtDate(p.date), p.method, p.project_name, p.note].filter(Boolean).join(' · ')}</span></div><span></span><div class="amt"></div></div>`) : empty('Nothing paid yet.')}</div>
+          <p class="hint">Payments are expenses in Books (category Contractors &amp; developers). Delete one there to undo it.</p>
+          ${w.notes ? html`<h2 class="sec">Notes</h2><div class="panel pad notes">${w.notes}</div>` : ''}
+          <h2 class="sec">What ${w.name.split(' ')[0]} can see</h2>
+          <div class="panel pad">${w.login ? accessSummary(w.perms) : html`<p class="muted">No sign-in. Only you see their records.</p>`}</div>
+          <p style="margin-top:28px"><button class="btn danger sm" data-act="delete-worker" data-id="${w.id}">Delete</button></p>
+        </div>
+      </div>`;
+  }
+  const SECTION_NAMES = { clients: 'Clients', invoices: 'Invoices', payments: 'Payments and cards', plans: 'Payment plans', books: 'Books', bills: 'Bills', reports: 'Reports' };
+  function accessSummary(p) {
+    const lines = [
+      p.projects === 'none' ? 'No projects' : p.projects === 'all' ? 'All projects' : 'Only projects they are on',
+      { none: 'Tasks hidden', view: 'Sees tasks', own: 'Adds and updates their own tasks', all: 'Adds, assigns and changes all tasks' }[p.tasks],
+      p.project_edit ? 'Can edit project details' : '', p.time ? 'Logs their hours' : '', p.notes ? 'Posts updates' : '',
+      p.money ? 'Sees project money and everyone\'s hours' : '', p.pay ? 'Sees their own pay' : '', p.client_info ? 'Sees which client' : ''
+    ].filter(Boolean);
+    const secs = Object.entries(p.sections).map(([k, v]) => `${SECTION_NAMES[k]}: ${v === 'edit' ? 'view and change' : 'view only'}`);
+    return html`<ul class="plain">${lines.concat(secs).map((x) => html`<li>${x}</li>`)}</ul>`;
+  }
+
+  async function workerForm(id) {
+    const d = id ? state.workers[id] || await api('workers.get', { id: Number(id) }) : null;
+    const w = d ? d.worker : { pay_type: 'hourly', active: true, login: false, perms: { projects: 'assigned', tasks: 'own', time: true, notes: true, pay: true, sections: {} } };
+    const p = w.perms;
+    const loginOff = state.cfg && state.cfg.settings && !state.cfg.settings.team_login;
+    const ck = (key, title, sub) => html`<label class="setrow"><div><b>${title}</b>${sub ? html`<span>${sub}</span>` : ''}</div><span class="switch"><input type="checkbox" data-p="${key}" ${raw(p[key] ? 'checked' : '')}><i></i></span></label>`;
+    const sel = (key, title, opts) => html`<label class="setrow"><div><b>${title}</b></div><select data-p="${key}" style="max-width:240px">${opts.map(([v, l]) => html`<option value="${v}" ${raw(p[key] === v ? 'selected' : '')}>${l}</option>`)}</select></label>`;
+    const m = modal(id ? 'Edit ' + w.name : 'Add person', html`<div class="fields">
+      <div class="grid2"><div><label for="w-name">Name</label><input id="w-name" value="${w.name || ''}" maxlength="120" required></div>
+        <div><label for="w-title">Role</label><input id="w-title" value="${w.title || ''}" maxlength="80" placeholder="e.g. Developer, Installer, Bookkeeper"></div></div>
+      <div class="grid2"><div><label for="w-email">Email</label><input id="w-email" type="email" value="${w.email || ''}" maxlength="200"></div>
+        <div><label for="w-phone">Phone</label><input id="w-phone" type="tel" value="${w.phone || ''}" maxlength="40"></div></div>
+      <div class="grid2"><div><label for="w-type">Usually paid</label><select id="w-type"><option value="hourly" ${raw(w.pay_type === 'hourly' ? 'selected' : '')}>Per hour</option><option value="project" ${raw(w.pay_type === 'project' ? 'selected' : '')}>Per project (fixed price)</option></select></div>
+        <div><label for="w-rate">Default rate</label><input id="w-rate" inputmode="decimal" placeholder="0.00" value="${w.rate_cents ? plain(w.rate_cents) : ''}"></div></div>
+      <div class="hint" style="margin-top:-6px">You can set a different rate on each project.</div>
+      <label class="setrow"><div><b>Active</b><span>Off = kept for history, hidden from new projects, can't sign in</span></div><span class="switch"><input type="checkbox" id="w-active" ${raw(w.active ? 'checked' : '')}><i></i></span></label>
+      <div><label for="w-notes">Notes</label><textarea id="w-notes" maxlength="2000" style="min-height:60px">${w.notes || ''}</textarea></div>
+
+      <h3 class="formsec">Sign-in and access</h3>
+      ${loginOff ? html`<div class="banner" style="margin:0">Team sign-in is off in Settings. You can set this up now; it works once you turn it on.</div>` : ''}
+      <label class="setrow"><div><b>Can sign in</b><span>With their email and their own password, at gogetterinc.com/admin</span></div><span class="switch"><input type="checkbox" id="w-login" ${raw(w.login ? 'checked' : '')}><i></i></span></label>
+      <div id="w-acc" class="${w.login ? '' : 'hide'}">
+        <div><label for="w-pw">${w.has_password ? 'New password (leave empty to keep)' : 'Password for them'}</label><input id="w-pw" type="text" autocomplete="off" minlength="8" maxlength="200" placeholder="At least 8 characters"></div>
+        <div class="hint">Changing it signs them out. Send it to them yourself.</div>
+        <div style="margin-top:14px"><label>Start from</label><div class="chips" id="w-presets"><button type="button" data-preset="worker">Worker</button><button type="button" data-preset="manager">Project manager</button><button type="button" data-preset="bookkeeper">Bookkeeper</button></div></div>
+        <div class="panel" id="w-perms">
+          ${sel('projects', 'Projects they see', [['assigned', 'Only projects they are on'], ['all', 'All projects'], ['none', 'None']])}
+          ${sel('tasks', 'Tasks', [['own', 'Add and update their own'], ['all', 'Add, assign and change all'], ['view', 'See only'], ['none', 'Hidden']])}
+          ${ck('time', 'Log their hours', '')}
+          ${ck('notes', 'Post project updates', '')}
+          ${ck('project_edit', 'Edit project details', 'Name, status, dates, description')}
+          ${ck('pay', 'See their own pay', 'Rate, earned, paid, owed')}
+          ${ck('money', 'See project money', 'Budget, costs, profit, everyone\'s hours and pay')}
+          ${ck('client_info', 'See which client', 'Client name on projects')}
+        </div>
+        <label style="margin-top:14px">Other parts of the admin</label>
+        <div class="panel" id="w-secs">${Object.entries(SECTION_NAMES).map(([k, l]) => html`<label class="setrow"><div><b>${l}</b></div><select data-s="${k}" style="max-width:200px">
+          ${[['none', 'Hidden'], ['view', 'View only'], ['edit', 'View and change']].map(([v, t]) => html`<option value="${v}" ${raw((p.sections[k] || 'none') === v ? 'selected' : '')}>${t}</option>`)}</select></label>`)}</div>
+        <div class="hint">Settings, Team and the owner home page are always only yours.</div>
+      </div>
+    </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    $('#w-login', m.d).addEventListener('change', (e) => $('#w-acc', m.d).classList.toggle('hide', !e.target.checked));
+    const PRESETS = {
+      worker: { projects: 'assigned', tasks: 'own', time: true, notes: true, project_edit: false, pay: true, money: false, client_info: false, sections: {} },
+      manager: { projects: 'all', tasks: 'all', time: true, notes: true, project_edit: true, pay: true, money: true, client_info: true, sections: { clients: 'view', invoices: 'view', bills: 'view' } },
+      bookkeeper: { projects: 'all', tasks: 'view', time: false, notes: false, project_edit: false, pay: true, money: true, client_info: true, sections: { clients: 'view', invoices: 'view', payments: 'view', plans: 'view', books: 'edit', bills: 'edit', reports: 'view' } }
+    };
+    $('#w-presets', m.d).addEventListener('click', (e) => {
+      const b = e.target.closest('[data-preset]'); if (!b) return;
+      const pr = PRESETS[b.dataset.preset];
+      $$('[data-p]', m.d).forEach((x) => { if (x.type === 'checkbox') x.checked = !!pr[x.dataset.p]; else x.value = pr[x.dataset.p]; });
+      $$('[data-s]', m.d).forEach((x) => { x.value = pr.sections[x.dataset.s] || 'none'; });
+      $$('#w-presets button', m.d).forEach((x) => x.classList.toggle('on', x === b));
+    });
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      const r = $('#w-rate', m.d).value.trim();
+      const rate = r ? parseMoney(r) : 0;
+      if (isNaN(rate)) return m.err('Rate should be a number, like 35');
+      const pOut = { sections: {} };
+      $$('[data-p]', m.d).forEach((x) => { pOut[x.dataset.p] = x.type === 'checkbox' ? x.checked : x.value; });
+      $$('[data-s]', m.d).forEach((x) => { if (x.value !== 'none') pOut.sections[x.dataset.s] = x.value; });
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try {
+          const res = await api('workers.save', { id: id ? Number(id) : undefined, name: $('#w-name', m.d).value, title: $('#w-title', m.d).value, email: $('#w-email', m.d).value,
+            phone: $('#w-phone', m.d).value, pay_type: $('#w-type', m.d).value, rate_cents: rate, active: $('#w-active', m.d).checked, notes: $('#w-notes', m.d).value,
+            login: $('#w-login', m.d).checked, password: $('#w-pw', m.d).value, perms: pOut });
+          state.team = null; delete state.workers[id];
+          m.close(); toast(id ? 'Saved' : 'Added');
+          if (!id) location.hash = '#/team/' + res.id; else refresh();
+        } catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  async function payWorkerForm(workerId, projectId) {
+    let name = '', owed = 0;
+    if (!member()) {
+      const d = state.workers[workerId] || await api('workers.get', { id: Number(workerId) });
+      name = d.worker.name;
+      owed = projectId && state.proj && state.proj.money ? (state.proj.money.byWorker[workerId] || {}).owed || 0 : d.pay.owed;
+    } else if (state.proj) {
+      const t = state.proj.team.find((x) => x.worker_id === Number(workerId)); name = t ? t.name : '';
+      owed = state.proj.money ? (state.proj.money.byWorker[workerId] || {}).owed || 0 : 0;
+    }
+    const m = modal('Pay ' + name, html`<div class="fields">
+      ${owed ? html`<p class="soft">${money(owed)} owed${projectId ? ' on this project' : ''}</p>` : ''}
+      <div class="grid2"><div><label for="wp-a">Amount</label><input id="wp-a" inputmode="decimal" value="${owed ? plain(owed) : ''}" placeholder="0.00"></div>
+        <div><label for="wp-d">Date paid</label><input id="wp-d" type="date" value="${today()}"></div></div>
+      <div><label for="wp-m">Paid by</label><select id="wp-m">${METHODS_PAY.map((x) => html`<option>${x}</option>`)}</select></div>
+      ${projectId ? html`<input type="hidden" id="wp-p" value="${projectId}">` : await projectField('', 'wp-p')}
+      <div><label for="wp-n">Note</label><input id="wp-n" maxlength="1000" placeholder="e.g. week of Oct 12"></div>
+      <p class="hint">Saved as an expense in Books, and taken off what you owe them.</p></div>`,
+    html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Record payment</button>`);
+    m.form.addEventListener('submit', async (e) => {
+      e.preventDefault(); m.err('');
+      const c = parseMoney($('#wp-a', m.d).value);
+      if (isNaN(c) || c <= 0) return m.err('Enter the amount you paid');
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try {
+          const pj = $('#wp-p', m.d) && $('#wp-p', m.d).value ? Number($('#wp-p', m.d).value) : null;
+          await api('workers.pay', { worker_id: Number(workerId), amount_cents: c, date: $('#wp-d', m.d).value, method: $('#wp-m', m.d).value, project_id: pj, note: $('#wp-n', m.d).value });
+          delete state.workers[workerId];
+          m.close(); toast('Payment recorded'); refresh();
+        } catch (err) { m.err(err.message); }
+      });
+    });
+  }
+
+  // ---------------------------------------------------------------- a team member's home
+  async function memberHome() {
+    const d = await api('me.home');
+    const p = perms();
+    const h = new Date().getHours();
+    const hello = (h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening') + ', ' + state.me.name.split(' ')[0];
+    const k = [];
+    if (d.hours) { k.push(kpi('Hours this week', hrs(d.hours.week))); k.push(kpi('Hours this month', hrs(d.hours.month))); }
+    if (d.pay) { k.push(kpi('Owed to you', money(d.pay.owed), money(d.pay.paid) + ' paid so far')); }
+    if (on('f_projects')) k.push(kpi('Open tasks', String(d.tasks.length), d.projects.length + ' project' + (d.projects.length === 1 ? '' : 's')));
+    const canTime = p.time && on('f_time') && on('f_projects');
+    const fakeCan = { tasks: p.tasks };
+    return html`
+      <div class="head"><div><h1>${hello}</h1><div class="sub">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div></div>
+        <div class="acts">${canTime ? html`<button class="btn" data-act="log-time">${raw(ICON.clock)}Log hours</button>` : ''}</div></div>
+      ${k.length ? html`<div class="kpis ${k.length === 3 ? 'three' : ''}">${k}</div>` : ''}
+      <div class="cols" style="margin-top:8px">
+        <div>
+          ${on('f_projects') && p.tasks !== 'none' ? html`<h2 class="sec">My tasks</h2><div class="panel rows">${d.tasks.length ? d.tasks.map((t) => taskRow({ ...t, worker_name: t.project_name }, fakeCan)) : empty('No open tasks. Nice.')}</div>` : ''}
+          ${on('f_projects') && p.projects !== 'none' ? html`<h2 class="sec">My projects <a class="muted" href="#/projects">See all</a></h2><div class="panel rows">${d.projects.length ? d.projects.map(projectRow) : empty('No open projects.')}</div>` : ''}
+        </div>
+        <div>
+          ${d.pay ? html`<h2 class="sec">My pay</h2><div class="panel pad"><p class="soft">${payLabel(d.pay.pay_type, d.pay.rate_cents)} by default. Some projects may have their own rate.</p>
+            <p style="margin-top:8px">${hrs(d.pay.minutes)} logged · ${money(d.pay.earned)} earned · ${money(d.pay.paid)} paid · <b>${money(d.pay.owed)} owed</b></p></div>
+            <h2 class="sec">Payments</h2><div class="panel rows">${d.pay.payments.length ? d.pay.payments.map((x) => html`<div class="row"><div class="main"><b>${money(x.amount_cents)}</b><span>${[fmtDate(x.date), x.method, x.project_name].filter(Boolean).join(' · ')}</span></div><span></span><div class="amt"></div></div>`) : empty('No payments yet.')}</div>` : ''}
+        </div>
+      </div>`;
+  }
+
   // ---------------------------------------------------------------- exports
   const stamp = () => today();
   const EXPORTS = {
@@ -1042,6 +1749,10 @@
       const width = 5;
       download(`profit-and-loss-${d.from}-to-${d.to}.csv`, csv(L.map((r) => r.concat(Array(width).fill('')).slice(0, width)), Array.from({ length: width }, (_, k) => ['', (r) => { const v = r[k]; return /^-?\d+\.\d{2}$/.test(v) ? Number(v) : v; }])).replace(/^,+\r\n/, ''));
     },
+    'export-bills': () => download(`bills-${stamp()}.csv`, csv(state.billList || [], [
+      ['Supplier', (b) => b.vendor], ['Bill #', (b) => b.number], ['Bill date', (b) => b.bill_date], ['Due', (b) => b.due_date], ['Status', (b) => BILL_LABEL[b.status]],
+      ['Category', (b) => b.category], ['Project', (b) => b.project_name], ['Amount', (b) => Number(plain(b.amount_cents))], ['Paid', (b) => Number(plain(b.paid_cents))],
+      ['Left to pay', (b) => Number(plain(b.left_cents))], ['Note', (b) => b.note]])),
     'export-tx': () => {
       const d = state.report; if (!d) return;
       download(`transactions-${d.from}-to-${d.to}.csv`, csv(d.rows, [
@@ -1054,17 +1765,19 @@
   document.addEventListener('click', async (e) => {
     const close = e.target.closest('[data-close]');
     if (close) { const d = close.closest('dialog'); if (d) d.close(); return; }
-    const t = e.target.closest('[data-act],[data-cf],[data-if],[data-kf]');
+    const t = e.target.closest('[data-act],[data-cf],[data-if],[data-kf],[data-bf],[data-pf]');
     if (!t) return;
     if (t.dataset.cf !== undefined) { clientFilter.status = t.dataset.cf; $$('#cchips button').forEach((b) => b.classList.toggle('on', b === t)); return drawClients(); }
     if (t.dataset.if !== undefined) { invFilter = t.dataset.if; $$('#ichips button').forEach((b) => b.classList.toggle('on', b === t)); return drawInvoices(); }
     if (t.dataset.kf !== undefined) { books.kind = t.dataset.kf; $$('#kchips button').forEach((b) => b.classList.toggle('on', b === t)); return drawBooks(); }
+    if (t.dataset.bf !== undefined) { billFilter = t.dataset.bf; $$('#bchips button').forEach((b) => b.classList.toggle('on', b === t)); return drawBills(); }
+    if (t.dataset.pf !== undefined) { projFilter = t.dataset.pf; $$('#pchips button').forEach((b) => b.classList.toggle('on', b === t)); return drawProjects(); }
     const a = t.dataset.act;
     try {
       if (EXPORTS[a]) return EXPORTS[a]();
       switch (a) {
         case 'theme': return toggleTheme();
-        case 'logout': await api('logout'); state.clients = null; state.cfg = null; clearInterval(state.poll); return gate();
+        case 'logout': $$('dialog').forEach((x) => x.close()); await api('logout'); state.clients = null; state.cfg = null; state.me = null; state.projects = null; state.team = null; clearInterval(state.poll); return gate();
         case 'reload': return refresh();
         case 'notifs': return openNotifs();
         case 'notifs-read': await api('notifications.read'); setBadge(0); return refresh();
@@ -1086,9 +1799,9 @@
           if (!confirm('Delete this client from the CRM? Their invoices and payments stay in Stripe.')) return;
           await api('clients.delete', { id: Number(t.dataset.id) }); await clientsCache(true); toast('Client deleted'); location.hash = '#/clients'; return;
         }
-        case 'new-invoice': return invoiceForm(t.dataset.client);
-        case 'new-charge': return chargeForm(t.dataset.client);
-        case 'new-plan': return planForm(t.dataset.client);
+        case 'new-invoice': return invoiceForm(t.dataset.client, t.dataset.project);
+        case 'new-charge': return chargeForm(t.dataset.client, t.dataset.project);
+        case 'new-plan': return planForm(t.dataset.client, t.dataset.project);
         case 'new-entry': return entryForm(t.dataset.kind);
         case 'edit-entry': return entryForm(null, t.dataset.id);
         case 'inv': return invAction(t.dataset.a, t.dataset.id, t);
@@ -1108,6 +1821,48 @@
           if (!confirm(`Stop the plan "${p ? p.title : ''}"? No more payments will be collected.`)) return;
           await api('plans.cancel', { id: Number(t.dataset.id) }); toast('Plan stopped'); return refresh();
         }
+        case 'more': {
+          e.preventDefault();
+          const rest = navItems().slice(4);
+          const m = modal('More', html`<div class="panel rows flat">${rest.map(([k, l, i]) => html`<a class="row morerow" href="#/${k}" data-close>${raw(i)}<div class="main"><b>${l}</b></div></a>`)}
+            ${!member() ? html`<a class="row morerow" href="#/settings" data-close>${raw(ICON.gear)}<div class="main"><b>Settings</b></div></a>` : ''}
+            <button type="button" class="row morerow" data-act="logout">${raw(ICON.out)}<div class="main"><b>Sign out</b></div></button></div>`, html`<button type="button" class="btn ghost" data-close>Close</button>`);
+          return m;
+        }
+        case 'new-bill': return billForm();
+        case 'edit-bill': return billForm(t.dataset.id);
+        case 'pay-bill': return payBillForm(state.bills[t.dataset.id]);
+        case 'new-project': return projectForm();
+        case 'edit-project': return projectForm(t.dataset.id);
+        case 'delete-project': {
+          if (!confirm('Delete this project with its tasks, hours and updates? Money in your books stays.')) return;
+          await api('projects.delete', { id: Number(t.dataset.id) }); state.projects = null; toast('Project deleted'); location.hash = '#/projects'; return;
+        }
+        case 'edit-task': return taskForm(Number(t.dataset.id));
+        case 'task-next': {
+          const tk = state.tasks[t.dataset.id]; if (!tk) return;
+          const next = { todo: 'doing', doing: 'done', done: 'todo' }[tk.status];
+          await busy(t, () => api('tasks.save', { id: tk.id, status: next, note: tk.note, title: tk.title, worker_id: tk.worker_id, due_date: tk.due_date }));
+          toast(next === 'done' ? 'Done' : next === 'doing' ? 'Started' : 'Opened again'); return refresh();
+        }
+        case 'log-time': return timeForm(t.dataset.project);
+        case 'log-time-for': {
+          const d = state.workers[t.dataset.worker];
+          const open = (d ? d.projects : []).filter((p) => p.status !== 'done');
+          if (!open.length) return toast('Put them on a project first (Projects → Edit → Team)', true);
+          state.proj = null;
+          return timeFormFor(Number(t.dataset.worker), open);
+        }
+        case 'edit-time': return timeForm(null, t.dataset.id);
+        case 'new-worker': return workerForm();
+        case 'edit-worker': return workerForm(t.dataset.id);
+        case 'delete-worker': {
+          if (!confirm('Delete this person?')) return;
+          await api('workers.delete', { id: Number(t.dataset.id) }); state.team = null; toast('Deleted'); location.hash = '#/team'; return;
+        }
+        case 'pay-worker': return payWorkerForm(t.dataset.worker, t.dataset.project);
+        case 'pay-bill-id': { const r = await api('bills.get', { id: Number(t.dataset.id) }); return payBillForm(r.bill); }
+        case 'link-invoices': return linkInvoicesForm(t.dataset.id, t.dataset.client);
         case 'period-go': {
           const id = t.dataset.id, st = id === 'bk' ? books : rep;
           st.from = $(`[data-from="${id}"]`).value; st.to = $(`[data-to="${id}"]`).value;
@@ -1138,6 +1893,17 @@
     if (e.target.id === 'cq') { clientFilter.q = e.target.value; drawClients(); }
   });
   document.addEventListener('submit', async (e) => {
+    if (e.target.id === 'taskform' || e.target.id === 'pnoteform') {
+      e.preventDefault();
+      const isTask = e.target.id === 'taskform';
+      const inp = $(isTask ? '#tasknew' : '#pnote'); if (!inp.value.trim()) return;
+      try {
+        if (isTask) await api('tasks.save', { project_id: Number(e.target.dataset.project), title: inp.value, worker_id: member() ? state.me.id : null });
+        else await api('notes.add', { project_id: Number(e.target.dataset.project), body: inp.value });
+        toast(isTask ? 'Task added' : 'Posted'); refresh();
+      } catch (err) { toast(err.message, true); }
+      return;
+    }
     if (e.target.id !== 'noteform') return;
     e.preventDefault();
     const inp = $('#note'); if (!inp.value.trim()) return;
@@ -1147,7 +1913,7 @@
 
   // after each render, fill in lists that filter on the client side
   const view = () => $('#view');
-  const afterRender = () => { drawClients(); drawInvoices(); drawBooks(); paintBars(view()); };
+  const afterRender = () => { drawClients(); drawInvoices(); drawBooks(); drawBills(); drawProjects(); paintBars(view()); };
   document.addEventListener('rendered', afterRender, true);
 
   // client page lives under #/clients/ID
@@ -1159,11 +1925,13 @@
     try { state.status = await api('status'); }
     catch (e) { $('#root').innerHTML = html`<div class="gate"><div class="box">${raw(LOGO)}<h1>Can't reach the server</h1><p>${e.message}</p><button class="btn" data-act="reload-page">Try again</button></div></div>`.s; return; }
     if (!state.status.authed) return gate();
-    try { state.cfg = await api('settings.get'); } catch (e) { state.cfg = null; }
+    state.me = state.status.me || { role: 'owner' };
+    state.clients = null; state.projects = null; state.team = null;
+    if (!member()) { try { state.cfg = await api('settings.get'); } catch (e) { state.cfg = null; } } else state.cfg = null;
     shell();
     clearInterval(state.poll);
     state.poll = setInterval(async () => {
-      if (document.hidden || !on('f_notifications')) return;
+      if (document.hidden || member() || !on('f_notifications')) return;
       try { const r = await api('notifications.list'); if (r.unread !== state.unread) setBadge(r.unread); } catch (e) {}
     }, 60000);
     window.removeEventListener('hashchange', route);

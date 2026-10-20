@@ -3,7 +3,7 @@
 import { one, q } from './db.js';
 import { stripe } from './stripe.js';
 import { money } from './templates.js';
-import { logActivity } from './notify.js';
+import { logActivity, notify, alertOwner } from './notify.js';
 import { getSettings } from './settings.js';
 import { emailInvoiceDoc } from './docs.js';
 
@@ -63,4 +63,31 @@ export async function runReminders() {
     after = list.data[list.data.length - 1].id;
   }
   return { today, sent, failed };
+}
+
+/**
+ * Daily: put supplier bills that are due soon or late on the bell, and email the owner if that alert is on.
+ * Each bill alerts once when due within 3 days, and once when it becomes late.
+ */
+export async function runBillAlerts() {
+  const settings = await getSettings();
+  if (!settings.f_bills) return { skipped: 'bills are switched off' };
+  const today = nyDay(Date.now());
+  const rows = await q(`select b.id, b.vendor, b.number, b.due_date, b.amount_cents - coalesce((select sum(e.amount_cents) from entries e where e.bill_id=b.id and e.kind='expense'),0) as left_cents
+    from bills b where b.due_date is not null and b.due_date <= ($1::date + 3)`, [today]);
+  const alerted = [];
+  for (const b of rows) {
+    const left = Number(b.left_cents);
+    if (left <= 0) continue;
+    const days = daysBetween(today, b.due_date);
+    const stage = days < 0 ? 'late' : 'soon';
+    const fresh = await one(`insert into reminders(invoice_id, stage) values ($1,$2) on conflict do nothing returning stage`, ['bill:' + b.id, stage]);
+    if (!fresh) continue;
+    const when = days < 0 ? `was due ${-days} day${days === -1 ? '' : 's'} ago` : days === 0 ? 'is due today' : `is due in ${days} day${days === 1 ? '' : 's'}`;
+    const title = `Bill from ${b.vendor} ${when}`;
+    await notify({ kind: 'bill', title, body: `${money(left)} to pay${b.number ? ' · bill #' + b.number : ''}` });
+    await alertOwner(settings, 'alert_bills', title, [['Supplier', b.vendor], ['Bill #', b.number || ''], ['Left to pay', money(left)], ['Due', b.due_date]], '#/bills');
+    alerted.push(b.id);
+  }
+  return { today, alerted };
 }
