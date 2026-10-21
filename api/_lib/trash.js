@@ -15,10 +15,11 @@ const KINDS = {
     refs: [['entries', 'project_id'], ['bills', 'project_id'], ['plans', 'project_id'], ['files', 'project_id']] },
   task: { table: 'tasks', children: [], refs: [] },
   time: { table: 'time_logs', children: [], refs: [] },
+  owner_money: { table: 'owner_money', children: [], refs: [] },
   worker: { table: 'workers', children: [['project_workers', 'worker_id'], ['time_logs', 'worker_id']],
     refs: [['tasks', 'worker_id'], ['project_notes', 'worker_id'], ['entries', 'worker_id']] }
 };
-const NAMES = { entry: 'Books entry', bill: 'Bill', client: 'Client', project: 'Project', task: 'Task', time: 'Hours', worker: 'Team member' };
+const NAMES = { entry: 'Books entry', bill: 'Bill', client: 'Client', project: 'Project', task: 'Task', time: 'Hours', worker: 'Team member', owner_money: 'Owner money' };
 
 /**
  * Move one item to the Trash. Returns the trash id, or null if it was already gone.

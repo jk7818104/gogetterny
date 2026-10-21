@@ -7,6 +7,52 @@ import { contextFor } from './_lib/session.js';
 import { hasSection } from './_lib/team.js';
 import { OPS } from './_lib/ops.js';
 import { stripe, stripeKey } from './_lib/stripe.js';
+import { TAX_OPS, OWNER_KINDS, taxMap } from './_lib/tax.js';
+import { qbJournal, toIIF, toQBOcsv, accountsCsv } from './_lib/qb.js';
+import { feedOk } from './_lib/links.js';
+import { getSettings } from './_lib/settings.js';
+import { partsFor, PART_NAMES } from './_lib/parts.js';
+
+/** @param {any} v */
+const csvCell = (v) => { const s = String(v == null ? '' : v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+
+/**
+ * GET /api/export?feed=SECRET&what=books|tax&year=2026 — a live CSV for Google Sheets (=IMPORTDATA("…")) or Excel (Data → From Web).
+ * No sign-in: the secret in the link is the key. Made and turned off in Settings → Google Sheets, Excel and QuickBooks.
+ * @param {URLSearchParams} sp @param {import('http').ServerResponse} res
+ */
+async function feed(sp, res) {
+  const s = await getSettings();
+  if (s.f_links === false || !(await feedOk(sp.get('feed') || ''))) throw new HttpError(404, 'Not found');
+  const y = sp.get('year') === 'all' ? null : Number(sp.get('year') || new Date().getFullYear());
+  if (y !== null && !(Number.isInteger(y) && y >= 2000 && y <= 2100)) throw new HttpError(400, 'Pick a year');
+  const from = y ? `${y}-01-01` : '2000-01-01', to = y ? `${y}-12-31` : '2100-12-31';
+  const ctx = { owner: true, settings: s };
+  const parts = partsFor(ctx);
+  /** @type {any[][]} */ let rows;
+  if (sp.get('what') === 'tax') {
+    if (!y) throw new HttpError(400, 'Pick a year');
+    const t = await TAX_OPS['tax.summary']({ year: y }, null, ctx);
+    rows = [['Tax line', 'Amount', 'Categories'], ['Income (Books)', c2d(t.income), ''], ['Cost of goods sold', c2d(t.cogs.total), 'Inventory Jan 1 + purchases - inventory Dec 31'],
+      ...t.expenses.byLine.filter((/** @type {any} */ l) => l.line !== 'Cost of goods sold').map((/** @type {any} */ l) => [l.line, c2d(l.cents), l.categories.map((/** @type {any} */ x) => x.category).join(', ')]),
+      ...Object.entries(OWNER_KINDS).map(([k, label]) => [label + ' (not in profit)', c2d(t.owner.totals[k]), ''])];
+  } else {
+    const map = await taxMap();
+    const ent = await q(`select e.*, c.name as client_name, w.name as worker_name, b.vendor as bill_vendor, null as invoice_number,
+        (select count(*) from files f where f.entry_id=e.id)::int as files
+      from entries e left join clients c on c.id=e.client_id left join workers w on w.id=e.worker_id left join bills b on b.id=e.bill_id
+      where e.date between $1 and $2 and e.part = any($3::text[]) order by e.date, e.id`, [from, to, parts]);
+    rows = [['Date', 'Type', 'Category', 'Tax line', 'Paid to / from', 'Method', 'Receipt / invoice #', 'Note', 'Amount', 'Receipt on file', ...(s.f_cellular ? ['Part'] : [])],
+      ...ent.map((e) => [e.date, e.kind === 'income' ? 'Income' : 'Expense', e.category, e.kind === 'income' ? 'Income' : map[e.category] || 'Other expenses',
+        e.worker_name || e.party || e.bill_vendor || e.client_name || '', e.method || '', e.ref || e.invoice_number || '', e.note || '',
+        c2d(e.kind === 'income' ? e.amount_cents : -e.amount_cents), e.files ? 'Yes' : '', ...(s.f_cellular ? [PART_NAMES[e.part] || e.part] : [])])];
+  }
+  res.statusCode = 200;
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.end(rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n');
+}
+
 
 const NAVY = 'FF101216', AMBER = 'FFF2B705', ZEBRA = 'FFF6F7F9';
 const USD = '"$"#,##0.00;[Red]-"$"#,##0.00';
@@ -30,14 +76,35 @@ export default async function handler(req, res) {
   try {
     if (req.method !== 'GET') throw new HttpError(405, 'GET only');
     if (!dbUrl()) throw new HttpError(404, 'Not found');
+    const fsp = new URL(req.url || '/', 'http://x').searchParams;
+    if (fsp.get('feed')) return await feed(fsp, res);
     const ctx = await contextFor(req);
     if (!ctx) throw new HttpError(401, 'Please sign in');
     if (!ctx.owner && !hasSection(/** @type {any} */ (ctx).perms, 'reports', 'view')) throw new HttpError(403, 'You don\'t have access to this');
     if (ctx.settings.f_pack === false || ctx.settings.f_reports === false) throw new HttpError(403, 'The accountant pack is switched off in Settings');
-    const year = Number(new URL(req.url || '/', 'http://x').searchParams.get('year'));
+    const year = Number(fsp.get('year'));
+    const format = fsp.get('format') || 'xlsx';
     if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new HttpError(400, 'Pick a year');
     const from = `${year}-01-01`, to = `${year}-12-31`;
     const s = ctx.settings;
+    const parts = partsFor(ctx);
+
+    // QuickBooks files: Desktop (.iif), Online (journal entries .csv) and the list of accounts for Online
+    if (format !== 'xlsx') {
+      if (s.f_qb === false) throw new HttpError(403, 'QuickBooks files are switched off in Settings');
+      if (!['iif', 'qbo', 'qbo-accounts'].includes(format)) throw new HttpError(400, 'Unknown file type');
+      const rep0 = await /** @type {any} */ (OPS).report({ from, to }, req, ctx);
+      const j = await qbJournal({ from, to, parts, withClass: false, stripeRows: rep0.rows.filter((/** @type {any} */ r) => r.method === 'Stripe') });
+      const base = `${(s.biz_name || 'GO GETTER').replace(/[^\w ]/g, '')} ${year}`;
+      const [body, type, name] = format === 'iif' ? [toIIF(j), 'application/octet-stream', `${base} QuickBooks Desktop.iif`]
+        : format === 'qbo' ? [toQBOcsv(j), 'text/csv; charset=utf-8', `${base} QuickBooks Online journal.csv`]
+        : [accountsCsv(j), 'text/csv; charset=utf-8', `${base} QuickBooks accounts.csv`];
+      res.statusCode = 200;
+      res.setHeader('Content-Type', type);
+      res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+      res.setHeader('Cache-Control', 'private, no-store');
+      return res.end(body);
+    }
 
     const [rep, entries, bills, team] = await Promise.all([
       /** @type {any} */ (OPS).report({ from, to }),
@@ -99,8 +166,8 @@ export default async function handler(req, res) {
 
     // 3. Books: income and expenses entered or imported
     const ent = (/** @type {string} */ kind) => entries.filter((e) => e.kind === kind).map((e) => [e.date, e.category, e.worker_name || e.party || e.bill_vendor || '', e.client_name || '', e.project_name || '',
-      e.method || '', e.bill_vendor ? `Bill${e.bill_number ? ' #' + e.bill_number : ''}` : e.worker_id ? 'Team pay' : e.import_file_id ? 'Bank import' : '', e.note || '', c2d(e.amount_cents), e.files ? 'Yes' : '']);
-    const entCols = /** @type {[string, number, string?][]} */ ([['Date', 12], ['Category', 24], ['Paid to / from', 28], ['Client', 22], ['Project', 22], ['Method', 14], ['Source', 14], ['Note', 40], ['Amount', 14, USD], ['Receipt on file', 10]]);
+      e.method || '', e.bill_vendor ? `Bill${e.bill_number ? ' #' + e.bill_number : ''}` : e.worker_id ? 'Team pay' : e.import_file_id ? 'Bank import' : '', e.ref || '', e.note || '', c2d(e.amount_cents), e.files ? 'Yes' : '']);
+    const entCols = /** @type {[string, number, string?][]} */ ([['Date', 12], ['Category', 24], ['Paid to / from', 28], ['Client', 22], ['Project', 22], ['Method', 14], ['Source', 14], ['Receipt / invoice #', 16], ['Note', 40], ['Amount', 14, USD], ['Receipt on file', 10]]);
     sheet(wb, 'Income (Books)', entCols, ent('income'));
     sheet(wb, 'Expenses (Books)', entCols, ent('expense'));
 
@@ -129,7 +196,39 @@ export default async function handler(req, res) {
       sheet(wb, 'Invoices', [['Invoice #', 18], ['Date', 12], ['Client', 28], ['Status', 12], ['Total', 14, USD], ['Paid', 14, USD], ['Still open', 14, USD], ['Paid on', 12], ['How', 26]], rows);
     }
 
-    // 7. Notes for the accountant
+    // 7. Tax-ready sheets (Taxes page switched on)
+    const taxOn = s.f_tax !== false;
+    if (taxOn) {
+      const t = await TAX_OPS['tax.summary']({ year }, req, ctx);
+      const ts = wb.addWorksheet('Tax summary', { views: [{ showGridLines: false }] });
+      ts.columns = [{ width: 46 }, { width: 18, style: { numFmt: USD } }, { width: 50 }];
+      ts.addRow([`${s.biz_name || 'GO GETTER'} — tax summary ${year}`]).font = { bold: true, size: 16 };
+      ts.addRow(['Expenses grouped by tax line (change the lines on the Taxes page). Owner money is not income or expense.']).font = { color: { argb: 'FF6B7280' } };
+      ts.addRow([]);
+      const tsec = (/** @type {string} */ l) => { const r = ts.addRow([l]); r.font = { bold: true, color: { argb: 'FFFFFFFF' } }; r.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: NAVY } }; };
+      tsec('COST OF GOODS SOLD');
+      ts.addRow(['Inventory on January 1', c2d(t.cogs.begin)]);
+      ts.addRow(['Purchases (categories on the "Cost of goods sold" line)', c2d(t.cogs.purchases)]);
+      ts.addRow(['Inventory on December 31', c2d(-t.cogs.end), t.cogs.entered ? '' : 'NOT ENTERED YET — enter it on the Taxes page']);
+      const cg = ts.addRow(['Cost of goods sold', c2d(t.cogs.total)]); cg.font = { bold: true };
+      ts.addRow([]);
+      tsec('EXPENSES BY TAX LINE');
+      for (const l of t.expenses.byLine) if (l.line !== 'Cost of goods sold') ts.addRow([l.line, c2d(l.cents), l.categories.map((/** @type {any} */ x) => x.category).join(', ')]);
+      ts.addRow([]);
+      tsec('OWNER MONEY (not in profit)');
+      for (const [k, label] of Object.entries(OWNER_KINDS)) ts.addRow([label, c2d(t.owner.totals[k])]);
+      ts.addRow([]);
+      tsec('READY FOR THE ACCOUNTANT?');
+      for (const c of t.checks) ts.addRow([c.title, c.cents ? c2d(c.cents) : null, c.ok ? 'OK' : `${c.count} to fix — ${c.hint}`]);
+      sheet(wb, 'Owner money', ([['Date', 12], ['What', 26], ['Who', 24], ['Method', 14], ['Note', 40], ['Amount', 14, USD]]),
+        t.owner.list.map((/** @type {any} */ o) => ([o.date, OWNER_KINDS[o.kind], o.person || '', o.method || '', o.note || '', c2d(o.amount_cents)])));
+      sheet(wb, '1099 check', [['Paid to', 28], ['Type', 14], ['Paid (not by card)', 16, USD], ['Paid by card', 14, USD], ['Payments', 10], ['1099-NEC needed', 14], ['W-9 on file', 12], ['Note', 36]],
+        t.vendors.map((/** @type {any} */ v) => [v.name, v.type, c2d(v.paid), c2d(v.card), v.payments, v.needs_1099 ? 'Yes' : '', v.w9 ? 'Yes' : v.needs_1099 ? 'MISSING' : '', v.note]));
+      sheet(wb, 'Missing receipts', ([['Date', 12], ['Paid to', 28], ['Category', 24], ['Method', 14], ['Note', 40], ['Amount', 14, USD]]),
+        t.missing.receipts.map((/** @type {any} */ e) => ([e.date, e.party || '', e.category, e.method || '', e.note || '', c2d(e.amount_cents)])));
+    }
+
+    // 8. Notes for the accountant
     const rd = wb.addWorksheet('Read me', { views: [{ showGridLines: false }] });
     rd.getColumn(1).width = 110;
     for (const l of [
@@ -140,7 +239,11 @@ export default async function handler(req, res) {
       'Bank statement rows that were imported say "Bank import" in the Source column.',
       'Supplier bills count as expenses on the day they were paid. "Bills" shows what was still unpaid on December 31.',
       'Team pay: "$600 or more" marks people who may need a 1099-NEC. Check this with your accountant (people paid by card or through a payment app may be reported by the payment company instead).',
-      'Receipts and bills that have a file attached can be opened from the admin.'
+      'Receipts and bills that have a file attached can be opened from the admin.',
+      ...(taxOn ? ['"Tax summary" groups expenses by tax line, works out the cost of goods sold from the inventory counts, and lists what is still missing.',
+        '"Owner money" is money the owner put in or took out, and loans. It is not income or an expense.',
+        '"1099 check" adds up what each person or company was paid in the year. Payments by card are left out (the card company reports them).'] : []),
+      ...(s.f_qb !== false ? ['QuickBooks files of the same year can be downloaded next to this pack: .iif for QuickBooks Desktop, and a journal-entry .csv for QuickBooks Online.'] : [])
     ]) rd.addRow([l]);
     rd.getRow(1).font = { bold: true, size: 14 };
 

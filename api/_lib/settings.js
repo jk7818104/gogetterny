@@ -44,6 +44,22 @@ export const DEFAULTS = {
   f_uploads: true,
   f_import: true,
   f_pack: true,
+  // tax-ready books: the Taxes page (owner money, 1099 vendors, inventory, tax lines, what is missing)
+  f_tax: true,
+  // QuickBooks files for the accountant, next to the accountant pack
+  f_qb: true,
+  // linked Google Sheets / Excel / CSV links read into Books, and a live feed link for Google Sheets and Excel
+  f_links: true,
+  // the boxes on the home page (Customize on the home page)
+  h_news: true,
+  h_kpis: true,
+  h_tax: true,
+  h_todo: true,
+  h_quick: true,
+  h_tasks: true,
+  h_money: true,
+  h_bills: true,
+  h_leads: true,
   f_reports: true,
   f_discounts: true,
   f_fields: true,
