@@ -39,7 +39,7 @@ const worker = (/** @type {any} */ v) => find('workers', 'team member', v, 'name
 // ---------- the tools ----------
 const S = (/** @type {Record<string, any>} */ props, /** @type {string[]} */ required = []) => ({ type: 'object', properties: props, required, additionalProperties: false });
 const str = { type: 'string' }, num = { type: 'number' }, date = { type: 'string', description: 'YYYY-MM-DD' };
-const CATS_OUT = ['Hardware & inventory', 'Shipping & freight', 'Contractors & developers', 'Software & subscriptions', 'Phone & internet', 'Travel', 'Office & supplies', 'Marketing', 'Bank & card fees', 'Taxes & licenses', 'Other'];
+const CATS_OUT = ['Hardware & inventory', 'Shipping & freight', 'Contractors & developers', 'Software & subscriptions', 'Phone & internet', 'Travel', 'Office & supplies', 'Marketing', 'Bank & card fees', 'Professional fees', 'Taxes & licenses', 'Other'];
 const CATS_IN = ['Projects', 'Consulting', 'Hardware sales', 'Invoices', 'Other income'];
 
 /** @type {{name: string, description: string, inputSchema: any, read?: boolean, run: (a: any, ctx: any) => Promise<any>}[]} */
@@ -132,6 +132,25 @@ const TOOLS = [
   { name: 'add_income', description: `Record money that came in outside Stripe (cash, check, Zelle, wire). Category one of: ${CATS_IN.join(', ')}.`,
     inputSchema: S({ amount: num, date, received_from: str, category: { type: 'string', enum: CATS_IN }, method: { type: 'string', enum: ['Cash', 'Check', 'Zelle', 'Bank transfer', 'Card', 'Other'] }, note: str, client: str, project: str }, ['amount', 'received_from']),
     run: async (a, ctx) => entry('income', { ...a, paid_to: a.received_from }, ctx) },
+  { name: 'tax_summary', read: true, description: 'Taxes for one year: how ready the books are for the accountant (missing receipts, W-9s, inventory count), expenses by tax line, cost of goods sold, owner money and loans, and who was paid $600 or more (1099 check).',
+    inputSchema: S({ year: num }, ['year']), run: async (a, ctx) => {
+      if (ctx.settings && ctx.settings.f_tax === false) throw new HttpError(400, 'Taxes are switched off in Settings');
+      const t = await call('tax.summary', { year: a.year }, ctx);
+      return { year: t.year, ready_percent: t.ready.pct, to_fix: t.checks.filter((/** @type {any} */ c) => !c.ok).map((/** @type {any} */ c) => ({ what: c.title, count: c.count, amount: usd(c.cents), how: c.hint })),
+        income: usd(t.income), cost_of_goods_sold: { inventory_jan_1: usd(t.cogs.begin), purchases: usd(t.cogs.purchases), inventory_dec_31: t.cogs.entered ? usd(t.cogs.end) : 'not counted yet', total: usd(t.cogs.total) },
+        expenses_by_tax_line: t.expenses.byLine.map((/** @type {any} */ l) => ({ line: l.line, amount: usd(l.cents) })),
+        owner_money: Object.fromEntries(Object.entries(t.owner.totals).map(([k, v]) => [k, usd(v)])),
+        paid_600_or_more: t.vendors.filter((/** @type {any} */ v) => v.needs_1099).map((/** @type {any} */ v) => ({ name: v.name, paid: usd(v.paid), type: v.type, w9_on_file: v.w9 })) };
+    } },
+  { name: 'add_owner_money', description: 'Record money the owner put into the business or took out, or a loan received or paid back. It is kept out of profit (not income, not an expense).',
+    inputSchema: S({ kind: { type: 'string', enum: ['contribution', 'draw', 'loan_in', 'loan_repay'] }, amount: num, date, person: str, method: { type: 'string', enum: ['Cash', 'Check', 'Zelle', 'Bank transfer', 'Card', 'Other'] }, note: str }, ['kind', 'amount']),
+    run: async (a, ctx) => {
+      if (ctx.settings && ctx.settings.f_tax === false) throw new HttpError(400, 'Taxes are switched off in Settings');
+      const body = { kind: a.kind, amount_cents: toCents(a.amount, 'Amount'), date: a.date || today(), person: a.person || '', method: a.method || 'Bank transfer', note: a.note || '' };
+      const r = await call('tax.owner.save', body, ctx);
+      await audit(ctx, 'tax.owner.save', body, r);
+      return { ok: true, id: r.id };
+    } },
   { name: 'add_bill', description: 'Add a supplier bill to pay later (with its due date). Use this for a bill or invoice someone sent us.',
     inputSchema: S({ supplier: str, amount: num, bill_date: date, due_date: date, bill_number: str, category: { type: 'string', enum: CATS_OUT }, project: str, note: str }, ['supplier', 'amount']),
     run: async (a, ctx) => {

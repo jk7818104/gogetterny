@@ -225,6 +225,54 @@ create index if not exists files_entry on files(entry_id);
 create index if not exists files_bill on files(bill_id);
 create index if not exists files_project on files(project_id);
 alter table entries add column if not exists import_file_id int;
+-- tax-ready books (f_tax): receipt or invoice number on an entry, owner money kept out of profit, 1099 vendors, year-end inventory
+alter table entries add column if not exists ref text;
+-- how one entry counts for taxes, when it is not what its category says (see tax.js LINE_GROUPS)
+alter table entries add column if not exists tax_line text;
+-- the shared tax code filters by part; GO GETTER has one part
+alter table entries add column if not exists part text not null default 'devices';
+alter table bills add column if not exists part text not null default 'devices';
+create table if not exists owner_money (
+  id serial primary key,
+  kind text not null check (kind in ('contribution','draw','loan_in','loan_repay')),
+  date date not null,
+  amount_cents bigint not null check (amount_cents > 0),
+  person text,
+  method text,
+  note text,
+  part text not null default 'devices',
+  created_at timestamptz not null default now()
+);
+create index if not exists owner_money_date on owner_money(date);
+create table if not exists vendors (
+  id serial primary key,
+  name text not null,
+  type text not null default 'unknown',
+  needs_1099 boolean,
+  w9 boolean not null default false,
+  note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+create unique index if not exists vendors_name on vendors(lower(name));
+create table if not exists links (
+  id serial primary key,
+  name text not null,
+  url text not null,
+  last_sync timestamptz,
+  last_file_id int,
+  created_at timestamptz not null default now()
+);
+alter table files add column if not exists link_id int references links(id) on delete set null;
+create table if not exists tax_years (
+  year int not null,
+  part text not null default 'devices',
+  inv_begin_cents bigint,
+  inv_end_cents bigint,
+  note text,
+  updated_at timestamptz not null default now(),
+  primary key (year, part)
+);
 create index if not exists tasks_project on tasks(project_id);
 create index if not exists time_project on time_logs(project_id, worker_id);
 create index if not exists notes_project on project_notes(project_id, created_at);

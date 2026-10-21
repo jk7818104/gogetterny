@@ -11,7 +11,7 @@ const ACTIONS = { finalize: 'Got pay link for', send: 'Emailed', void: 'Voided',
 /** Ops that only read: not logged. */
 const READS = new Set(['dashboard', 'notifications.list', 'notifications.read', 'settings.get', 'clients.list', 'clients.get', 'invoices.list', 'cards.list',
   'charges.list', 'plans.list', 'entries.list', 'bills.list', 'bills.get', 'report', 'me.home', 'projects.list', 'projects.get', 'team.names',
-  'workers.list', 'workers.get', 'trash.list', 'audit.list', 'files.list', 'import.preview', 'import.list', 'ai.read', 'ai.chat', 'search', 'todo']);
+  'workers.list', 'workers.get', 'trash.list', 'audit.list', 'files.list', 'import.preview', 'import.list', 'tax.summary', 'links.list', 'ai.read', 'ai.chat', 'search', 'todo']);
 
 /** @type {Record<string, (b: any, d: any) => [string, string?] | string | Promise<[string, string?] | string>>} */
 const SAY = {
@@ -62,7 +62,17 @@ const SAY = {
   'import.undo': (b, d) => [`Undid an import (${d.count} rows)`, '#/books'],
   'summary.send': () => 'Sent the weekly summary now',
   'connector.key': () => 'Made a new key for the Claude connector',
-  'connector.off': () => 'Turned off the Claude connector'
+  'connector.off': () => 'Turned off the Claude connector',
+  'tax.owner.save': (b) => [`${b.id ? 'Edited' : 'Added'} owner money ${money(b.amount_cents)}`, '#/tax'],
+  'tax.owner.delete': (b, d) => [`Deleted ${d.label || 'owner money'}`, '#/tax'],
+  'tax.vendor.save': (b) => [`Updated 1099 details for ${nm(b.name)}`, '#/tax'],
+  'tax.year.save': (b) => [`Saved the inventory count for ${b.year}`, '#/tax'],
+  'tax.map.save': () => ['Changed which tax line the categories go to', '#/tax'],
+  'links.save': (b) => [`${b.id ? 'Edited' : 'Added'} the linked sheet ${nm(b.name)}`, '#/books'],
+  'links.delete': () => ['Removed a linked sheet', '#/books'],
+  'links.sync': () => ['Read a linked sheet', '#/books'],
+  'feed.key': () => 'Made a new live feed link for Google Sheets / Excel',
+  'feed.off': () => 'Turned off the live feed link'
 };
 
 /** Write one line for a change that worked. Never throws. @param {any} ctx @param {string} op @param {any} body @param {any} data */

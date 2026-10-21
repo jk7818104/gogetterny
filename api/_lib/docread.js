@@ -11,6 +11,7 @@ export const TYPES = {
   'application/vnd.ms-excel': 'xls',
   'text/csv': 'csv',
   'text/plain': 'txt',
+  'text/x-iif': 'iif', 'application/x-ofx': 'ofx', 'application/octet-stream': 'file',
   'image/jpeg': 'image', 'image/png': 'image', 'image/webp': 'image', 'image/heic': 'image', 'image/heif': 'image', 'image/gif': 'image'
 };
 const BY_EXT = { pdf: 'application/pdf', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -29,14 +30,20 @@ export function sniffType(buf, name, claimed) {
   if (head.startsWith('PK')) {
     if (ext === 'docx') return BY_EXT.docx;
     if (ext === 'xlsx') return BY_EXT.xlsx;
-    throw new HttpError(400, 'This file type is not supported. Use PDF, Word (.docx), Excel (.xlsx), CSV or a photo.');
+    return 'application/octet-stream';   // any other zip-based file (.zip, .pptx, .ods…): kept, not read
   }
-  if (buf[0] === 0xd0 && buf[1] === 0xcf) return 'application/vnd.ms-excel';   // old .xls / .doc
-  if (ext === 'csv' || ext === 'txt') {
-    if (buf.subarray(0, 4000).includes(0)) throw new HttpError(400, 'This does not look like a text file');
-    return ext === 'csv' ? 'text/csv' : 'text/plain';
+  if (buf[0] === 0xd0 && buf[1] === 0xcf) return ['xls', 'xlt', 'csv', ''].includes(ext) ? 'application/vnd.ms-excel' : 'application/octet-stream';   // old .xls (an old .doc, .ppt or .msg is kept, not read)
+  const text = !buf.subarray(0, 4000).includes(0);
+  const start = buf.subarray(0, 600).toString('latin1');
+  // QuickBooks Desktop export (.iif) and bank downloads for QuickBooks / Quicken (.qbo, .ofx, .qfx)
+  if (text && (ext === 'iif' || /^\s*!(TRNS|ACCNT|SPL|CUST|VEND)\b/.test(start))) return 'text/x-iif';
+  if (text && (['qbo', 'ofx', 'qfx'].includes(ext) || /OFXHEADER|<OFX>/i.test(start))) return 'application/x-ofx';
+  if (ext === 'csv' || ext === 'tsv' || ext === 'txt') {
+    if (!text) throw new HttpError(400, 'This does not look like a text file');
+    return ext === 'txt' ? 'text/plain' : 'text/csv';
   }
-  throw new HttpError(400, 'This file type is not supported. Use PDF, Word (.docx), Excel (.xlsx), CSV or a photo.');
+  // any other file is kept as it is (it downloads when opened, never runs in the browser)
+  return 'application/octet-stream';
 }
 
 // ---------- text ----------
@@ -108,18 +115,65 @@ export async function rowsOf(buf, type) {
     const ExcelJS = (await import('exceljs')).default;
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(/** @type {any} */ (buf));
-    const ws = wb.worksheets.find((w) => w.actualRowCount > 1) || wb.worksheets[0];
-    if (!ws) return [];
-    /** @type {string[][]} */ const out = [];
-    ws.eachRow({ includeEmpty: false }, (r) => {
-      if (out.length > 20000) return;
-      const vals = /** @type {any[]} */ (r.values).slice(1).map(cellText);
-      if (vals.some((x) => x)) out.push(vals);
-    });
-    return out;
+    // a workbook with several sheets: the sheet that looks most like a list of money rows (dates and amounts)
+    /** @type {string[][] | null} */ let best = null;
+    let bestScore = -1;
+    for (const ws of wb.worksheets) {
+      if (ws.actualRowCount < 2) continue;
+      /** @type {string[][]} */ const out = [];
+      ws.eachRow({ includeEmpty: false }, (r) => {
+        if (out.length > 20000) return;
+        const vals = /** @type {any[]} */ (r.values).slice(1).map(cellText);
+        if (vals.some((x) => x)) out.push(vals);
+      });
+      const t = out.length ? findColumns(out) : null;
+      const sc = t && t.ok ? t.body.filter((r) => toDate(r[t.map.date])).length : 0;
+      if (sc > bestScore) { best = out; bestScore = sc; }
+    }
+    return best || [];
   }
-  if (type === 'application/vnd.ms-excel') throw new HttpError(400, 'Old Excel files (.xls) can\'t be read. In Excel, choose File → Save As → .xlsx or .csv, and upload that.');
+  if (type === 'application/vnd.ms-excel') {
+    try {
+      const XLSX = (await import('xlsx')).default;
+      const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
+      const ws = wb.SheetNames.map((n) => wb.Sheets[n]).find((w) => w && w['!ref']) || null;
+      if (!ws) return [];
+      const rows = /** @type {any[][]} */ (XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }));
+      return rows.slice(0, 20000).map((r) => r.map(cellText)).filter((r) => r.some((x) => x));
+    } catch (e) { throw new HttpError(400, 'This old Excel file could not be read. In Excel, choose File → Save As → .xlsx and upload that.'); }
+  }
+  if (type === 'text/x-iif') return iifRows(buf.toString('utf8'));
+  if (type === 'application/x-ofx') return ofxRows(buf.toString('utf8'));
   return null;
+}
+
+/** QuickBooks Desktop .iif: one row per transaction (its first line), as Date, Description, Amount, Account. @param {string} s */
+function iifRows(s) {
+  /** @type {string[][]} */ const out = [['Date', 'Description', 'Amount', 'Account', 'Type', 'Number']];
+  /** @type {string[]} */ let head = [];
+  for (const line of s.replace(/^\uFEFF/, '').split(/\r?\n/)) {
+    const c = line.split('\t').map((x) => x.replace(/^"|"$/g, '').trim());
+    if (c[0] === '!TRNS') { head = c; continue; }
+    if (c[0] !== 'TRNS' || !head.length) continue;
+    const g = (/** @type {string} */ k) => c[head.indexOf(k)] || '';
+    out.push([g('DATE'), [g('NAME'), g('MEMO')].filter(Boolean).join(' - '), g('AMOUNT'), g('ACCNT'), g('TRNSTYPE'), g('DOCNUM')]);
+    if (out.length > 20000) break;
+  }
+  return out.length > 1 ? out : [];
+}
+
+/** Bank download (.qbo / .ofx / .qfx): every transaction as Date, Description, Amount, Number. @param {string} s */
+function ofxRows(s) {
+  /** @type {string[][]} */ const out = [['Date', 'Description', 'Amount', 'Number']];
+  const tag = (/** @type {string} */ block, /** @type {string} */ t) => { const m = new RegExp('<' + t + '>([^<\\r\\n]*)', 'i').exec(block); return m ? m[1].trim() : ''; };
+  for (const m of s.matchAll(/<STMTTRN>([\s\S]*?)(?:<\/STMTTRN>|(?=<STMTTRN>)|<\/BANKTRANLIST>)/gi)) {
+    const b = m[1];
+    const d = tag(b, 'DTPOSTED');
+    const date = /^\d{8}/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6, 8)}` : '';
+    out.push([date, [tag(b, 'NAME'), tag(b, 'MEMO')].filter(Boolean).join(' - '), tag(b, 'TRNAMT'), tag(b, 'CHECKNUM') || tag(b, 'REFNUM')]);
+    if (out.length > 20000) break;
+  }
+  return out.length > 1 ? out : [];
 }
 
 // ---------- understanding numbers and dates ----------

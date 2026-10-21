@@ -59,7 +59,10 @@ const SECTION_OPS = {
   'bills.list': ['bills', 'view'], 'bills.get': ['bills', 'view'], 'bills.save': ['bills', 'edit'], 'bills.delete': ['bills', 'edit'], 'bills.pay': ['bills', 'edit'],
   'report': ['reports', 'view'],
   'import.preview': ['books', 'edit'], 'import.commit': ['books', 'edit'], 'import.undo': ['books', 'edit'], 'import.list': ['books', 'view'],
-  'workers.pay': ['books', 'edit']
+  'workers.pay': ['books', 'edit'],
+  'tax.summary': ['reports', 'view'], 'tax.owner.save': ['books', 'edit'], 'tax.owner.delete': ['books', 'edit'], 'tax.vendor.save': ['books', 'edit'],
+  'tax.year.save': ['books', 'edit'], 'tax.map.save': ['books', 'edit'],
+  'links.list': ['books', 'view'], 'links.save': ['books', 'edit'], 'links.delete': ['books', 'edit'], 'links.sync': ['books', 'edit']
 };
 /** Ops that check the member's project rights themselves. */
 /** Ops that check rights themselves, whatever is switched on. */
@@ -85,6 +88,8 @@ export function allowed(ctx, op, settings) {
   if (!need) return false;   // settings, team, alerts, dashboard: owner only
   const feature = { payments: 'f_payments', plans: 'f_plans', books: 'f_books', bills: 'f_bills', reports: 'f_reports' }[/** @type {string} */ (need[0])];
   if (op.startsWith('import.') && settings.f_import === false) return false;
+  if (op.startsWith('tax.') && settings.f_tax === false) return false;
+  if (op.startsWith('links.') && settings.f_links === false) return false;
   if (feature && settings[feature] === false) return false;
   return hasSection(p, need[0], need[1]);
 }
@@ -101,7 +106,7 @@ export async function memberFor(s, settings) {
 export function meFor(ctx, settings) {
   if (ctx.owner) return { role: 'owner' };
   const f = {};
-  for (const k of ['f_bulk', 'f_uploads', 'f_import', 'f_pack', 'f_trash', 'f_projects', 'f_time', 'f_payments', 'f_plans', 'f_books', 'f_bills', 'f_reports', 'f_cards', 'f_discounts', 'f_fields', 'f_cc', 'f_ach', 'f_reminders'])
+  for (const k of ['f_bulk', 'f_uploads', 'f_import', 'f_pack', 'f_trash', 'f_projects', 'f_time', 'f_payments', 'f_plans', 'f_books', 'f_bills', 'f_reports', 'f_cards', 'f_discounts', 'f_fields', 'f_cc', 'f_ach', 'f_reminders', 'f_tax', 'f_qb', 'f_links'])
     /** @type {any} */ (f)[k] = settings[k];
   return { role: 'member', id: ctx.worker.id, name: ctx.worker.name, title: ctx.worker.title || '', perms: ctx.perms, features: f, biz_name: settings.biz_name };
 }

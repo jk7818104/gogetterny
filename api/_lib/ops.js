@@ -12,6 +12,15 @@ import { PROJECT_OPS, owedByWorker } from './projects.js';
 import { trashDelete, TRASH_OPS } from './trash.js';
 import { AUDIT_OPS } from './audit.js';
 import { FILE_OPS, linkFile } from './files.js';
+import { TAX_OPS, TAX_LINES, LINES_FOR } from './tax.js';
+
+/** A "counts as" choice that fits money in or money out, or null (= as its category says). @param {string} kind @param {any} v */
+function taxLineFor(kind, v) {
+  if (!v) return null;
+  if (!LINES_FOR[kind === 'income' ? 'income' : 'expense'].includes(String(v))) throw new HttpError(400, `"${String(v).slice(0, 40)}" does not fit ${kind === 'income' ? 'money in' : 'money out'}`);
+  return String(v);
+}
+import { LINK_OPS, feedInfo } from './links.js';
 
 const TZ = 'America/New_York';
 
@@ -588,13 +597,16 @@ async function entriesList(/** @type {any} */ b) {
 async function entriesSave(/** @type {any} */ b) {
   const kind = b.kind === 'income' ? 'income' : 'expense';
   const f = [kind, day(b.date), cents(b.amount_cents), str(b.category, 60) || 'Other', str(b.party, 120), str(b.method, 40),
-    b.client_id ? intId(b.client_id) : null, str(b.note, 1000), b.project_id ? intId(b.project_id) : null];
+    b.client_id ? intId(b.client_id) : null, str(b.note, 1000), b.project_id ? intId(b.project_id) : null, str(b.ref, 60), taxLineFor(kind, b.tax_line)];
   if (b.id) {
-    await q(`update entries set kind=$1, date=$2, amount_cents=$3, category=$4, party=$5, method=$6, client_id=$7, note=$8, project_id=$9 where id=$10`, [...f, intId(b.id)]);
+    const o = await one(`select ref, tax_line from entries where id=$1`, [intId(b.id)]);
+    if (b.ref === undefined) f[9] = o ? o.ref : null;
+    if (b.tax_line === undefined) f[10] = o ? o.tax_line : null;
+    await q(`update entries set kind=$1, date=$2, amount_cents=$3, category=$4, party=$5, method=$6, client_id=$7, note=$8, project_id=$9, ref=$10, tax_line=$11 where id=$12`, [...f, intId(b.id)]);
     await linkFile(b.file_id, { entry_id: Number(b.id) });
     return { id: Number(b.id) };
   }
-  const r = await one(`insert into entries(kind, date, amount_cents, category, party, method, client_id, note, project_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, f);
+  const r = await one(`insert into entries(kind, date, amount_cents, category, party, method, client_id, note, project_id, ref, tax_line) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`, f);
   await linkFile(b.file_id, { entry_id: r.id });
   return { id: r.id };
 }
@@ -613,6 +625,13 @@ async function entriesBulk(/** @type {any} */ b) {
   let count = 0;
   if (b.category) count = (await q(`update entries set category=$1 where id = any($2::int[]) returning id`, [str(b.category, 60), ids])).length;
   if (b.project_id !== undefined) count = (await q(`update entries set project_id=$1 where id = any($2::int[]) returning id`, [b.project_id ? intId(b.project_id) : null, ids])).length;
+  if (b.tax_line !== undefined) {
+    // "counts as" for several at once; an empty value goes back to what the category says
+    const v = b.tax_line ? String(b.tax_line) : null;
+    if (v && !TAX_LINES.includes(v)) throw new HttpError(400, 'Pick how they count');
+    const kinds = v ? ['expense', 'income'].filter((k) => LINES_FOR[/** @type {'expense'|'income'} */ (k)].includes(v)) : ['expense', 'income'];
+    count = (await q(`update entries set tax_line=$1 where id = any($2::int[]) and kind = any($3::text[]) returning id`, [v, ids, kinds])).length;
+  }
   return { ok: true, count };
 }
 
@@ -888,10 +907,10 @@ async function alertsStatus() {
 }
 
 async function settingsGet() {
-  const [settings, alerts, mcp, files] = await Promise.all([getSettings(), alertsStatus(), getKV('sys:mcp'),
+  const [settings, alerts, mcp, feed, files] = await Promise.all([getSettings(), alertsStatus(), getKV('sys:mcp'), feedInfo(),
     one(`select count(*)::int as n, coalesce(sum(size),0)::bigint as bytes from files`)]);
   return { settings, alerts, email: { ready: emailReady(), from: fromAddress() }, stripe: !!stripeKey(), testMode: testMode(),
-    connector: { on: !!(mcp && mcp.hash), created: mcp?.created || null, last4: mcp?.last4 || '' }, files: { count: files?.n || 0, bytes: files?.bytes || 0 } };
+    connector: { on: !!(mcp && mcp.hash), created: mcp?.created || null, last4: mcp?.last4 || '' }, files: { count: files?.n || 0, bytes: files?.bytes || 0 }, feed };
 }
 
 /** A new secret key for the Claude connector. Shown once; only its fingerprint is kept. The old key stops working. */
@@ -979,5 +998,7 @@ export const OPS = {
   ...PROJECT_OPS,
   ...TRASH_OPS,
   ...AUDIT_OPS,
-  ...FILE_OPS
+  ...FILE_OPS,
+  ...TAX_OPS,
+  ...LINK_OPS
 };

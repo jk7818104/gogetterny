@@ -38,7 +38,10 @@
     spark: I('<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/><path d="M19 16l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>'),
     upload: I('<path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>'),
     clip: I('<path d="M20 11.5l-8.2 8.2a5 5 0 0 1-7.1-7.1l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15 7"/>'),
-    bank: I('<path d="M3 9l9-5 9 5M5 9v9M9.5 9v9M14.5 9v9M19 9v9M3 20h18"/>')
+    bank: I('<path d="M3 9l9-5 9 5M5 9v9M9.5 9v9M14.5 9v9M19 9v9M3 20h18"/>'),
+    tax: I('<path d="M6 2.5h12v19l-3-2-3 2-3-2-3 2z"/><path d="M9 15.5l6-7"/><circle cx="9.5" cy="9" r="1.2"/><circle cx="14.5" cy="15" r="1.2"/>'),
+    link: I('<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1 1"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1-1"/>'),
+    sliders: I('<path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0"/><circle cx="16" cy="6" r="2"/><circle cx="10" cy="12" r="2"/><circle cx="18" cy="18" r="2"/>')
   };
 
   // ---------------------------------------------------------------- html helpers (everything is escaped unless wrapped in raw)
@@ -168,7 +171,7 @@
   const NAV_ALL = [
     ['home', 'Home', ICON.home], ['clients', 'Clients', ICON.clients], ['invoices', 'Invoices', ICON.invoice],
     ['payments', 'Payments', ICON.card, 'f_payments'], ['plans', 'Plans', ICON.plan, 'f_plans'], ['books', 'Books', ICON.books, 'f_books'],
-    ['bills', 'Bills', ICON.bill, 'f_bills'], ['reports', 'Reports', ICON.report, 'f_reports'],
+    ['bills', 'Bills', ICON.bill, 'f_bills'], ['reports', 'Reports', ICON.report, 'f_reports'], ['tax', 'Taxes', ICON.tax, 'f_tax'],
     ['projects', 'Projects', ICON.project, 'f_projects'], ['team', 'Team', ICON.team, 'f_team']
   ];
   // signed in as a team member (not the owner)?
@@ -183,7 +186,7 @@
     return lvl === 'view' ? !!v : v === 'edit';
   };
   const mailOn = () => !!(state.cfg && state.cfg.email && state.cfg.email.ready);
-  const memberNav = (k) => k === 'home' || (k === 'projects' ? perms().projects !== 'none' : k === 'team' ? false : can(k));
+  const memberNav = (k) => k === 'home' || (k === 'projects' ? perms().projects !== 'none' : k === 'team' ? false : k === 'tax' ? can('reports') : can(k));
   const navItems = () => NAV_ALL.filter((n) => (!n[3] || on(n[3])) && (!member() || memberNav(n[0])));
   function shell() {
     const mode = state.status.testMode ? html`<span class="mode">Test mode</span>` : '';
@@ -350,37 +353,46 @@
     const h = new Date().getHours();
     const hello = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
     const month = new Date().toLocaleDateString('en-US', { month: 'long' });
+    // the boxes the owner picked (Customize); all on at the start
+    const hs = (state.cfg && state.cfg.settings) || {};
+    const box = (k) => hs[k] !== false;
+    const tax = on('f_tax') && box('h_tax') ? await api('tax.summary', { year: new Date().getMonth() < 4 ? new Date().getFullYear() - 1 : new Date().getFullYear(), light: true }).catch(() => null) : null;
     return html`
-      <div class="head"><div><h1>${hello}</h1><div class="sub">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div></div></div>
+      <div class="head"><div><h1>${hello}</h1><div class="sub">${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}</div></div>
+        <div class="acts"><button class="btn ghost sm" data-tx="customize">${raw(ICON.sliders)}Customize</button></div></div>
       ${noStripe()}
-      ${fresh.length && on('f_notifications') ? html`<div class="news"><div class="news-h"><b>${raw(ICON.bell)} What's new</b><button class="linkbtn" data-act="notifs-read">Mark all read</button></div>
+      ${fresh.length && on('f_notifications') && box('h_news') ? html`<div class="news"><div class="news-h"><b>${raw(ICON.bell)} What's new</b><span class="r" style="display:flex;gap:8px;align-items:center"><button class="linkbtn" data-act="notifs-read">Mark all read</button>${hideBox('h_news')}</span></div>
         <div class="panel rows">${fresh.map(notifRow)}</div></div>` : ''}
-      <div class="kpis">
+      ${!box('h_kpis') ? '' : html`<div class="boxhead">${hideBox('h_kpis')}</div><div class="kpis">
         ${kpi('Income in ' + month, money(d.month.income), d.month.stripe_fees ? money(d.month.stripe_fees) + ' card fees already taken off' : 'card payments and recorded income')}
         ${kpi('Expenses in ' + month, money(d.month.expenses), 'from your books')}
         ${kpi('Profit in ' + month, money(d.month.profit), '', d.month.profit >= 0 ? 'pos' : 'neg')}
         ${kpi('Waiting to be paid', money(d.open.total), `${d.open.count} open invoice${d.open.count === 1 ? '' : 's'}${d.open.overdue ? ` · ${d.open.overdue} late` : ''}`, d.open.overdue ? 'neg' : '')}
-      </div>
-      ${!on('f_todo') ? '' : d.todo && d.todo.length ? html`<h2 class="sec">To do <span class="muted">${d.todo.length} thing${d.todo.length === 1 ? '' : 's'}</span></h2><div class="panel rows todo">${d.todo.map(todoRow)}</div>`
+      </div>`}
+      ${tax ? html`<h2 class="sec">Ready for the accountant (${tax.year}) <span class="r"><a class="muted" href="#/tax">Taxes</a>${hideBox('h_tax')}</span></h2>
+        <a class="panel pad readybox click" href="#/tax" style="display:block;text-decoration:none"><div class="readyhead"><b>${tax.ready.pct}% ready</b>
+          <span class="muted">${tax.checks.filter((c) => !c.ok).map((c) => `${c.count} ${c.title.toLowerCase()}`).join(' · ') || 'Everything is done'}</span></div>
+          <div class="progress"><i data-w="${tax.ready.pct}"></i></div></a>` : ''}
+      ${!on('f_todo') || !box('h_todo') ? '' : d.todo && d.todo.length ? html`<h2 class="sec">To do <span class="r"><span class="muted">${d.todo.length} thing${d.todo.length === 1 ? '' : 's'}</span>${hideBox('h_todo')}</span></h2><div class="panel rows todo">${d.todo.map(todoRow)}</div>`
         : html`<div class="panel pad allclear" style="margin-top:14px">${raw(ICON.ok)}<span>Nothing waiting on you. No late invoices, no bills due, nobody owed.</span></div>`}
-      ${(() => {
+      ${!box('h_quick') ? '' : (() => {
         const q = [html`<button type="button" data-act="new-invoice">${raw(ICON.invoice)}New invoice</button>`];
         if (on('f_cards')) q.push(html`<button type="button" data-act="new-charge">${raw(ICON.card)}Charge a card</button>`);
         if (on('f_plans')) q.push(html`<button type="button" data-act="new-plan">${raw(ICON.plan)}Payment plan</button>`);
         if (on('f_books')) q.push(html`<button type="button" data-act="new-entry" data-kind="expense">${raw(ICON.dollar)}Add expense</button>`);
         if (on('f_bills')) q.push(html`<button type="button" data-act="new-bill">${raw(ICON.bill)}Add bill</button>`);
         q.push(html`<button type="button" data-act="new-client">${raw(ICON.user)}Add client</button>`);
-        return html`<div class="quick" style="--n:${q.length}">${q}</div>`;
+        return html`<div class="boxhead">${hideBox('h_quick')}</div><div class="quick" style="--n:${q.length}">${q}</div>`;
       })()}
-      <div class="cols">
-        <div><h2 class="sec">Waiting to be paid <a class="muted" href="#/invoices">See all</a></h2>
+      ${!box('h_money') ? '' : html`<div class="cols">
+        <div><h2 class="sec">Waiting to be paid <span class="r"><a class="muted" href="#/invoices">See all</a>${hideBox('h_money')}</span></h2>
           <div class="panel rows">${d.open.list.length ? d.open.list.map((i) => invoiceRow(i, { link: true })) : empty('Nothing waiting. Every invoice is paid.')}</div></div>
         <div><h2 class="sec">Latest payments <a class="muted" href="#/payments">See all</a></h2>
           <div class="panel rows">${d.recent.length ? d.recent.map((c) => chargeRow(c, { link: true })) : empty('No card payments yet.')}</div></div>
-      </div>
-      ${on('f_bills') && d.bills && d.bills.list.length ? html`<h2 class="sec">Bills to pay <a class="muted" href="#/bills">${money(d.bills.owed)} owed${d.bills.late ? ` · ${d.bills.late} late` : ''}</a></h2>
+      </div>`}
+      ${on('f_bills') && box('h_bills') && d.bills && d.bills.list.length ? html`<h2 class="sec">Bills to pay <span class="r"><a class="muted" href="#/bills">${money(d.bills.owed)} owed${d.bills.late ? ` · ${d.bills.late} late` : ''}</a>${hideBox('h_bills')}</span></h2>
         <div class="panel rows">${d.bills.list.map((b) => billRow(b))}</div>` : ''}
-      ${d.recentLeads.length ? html`<h2 class="sec">New leads <span class="muted">${d.counts.leads} total</span></h2>
+      ${d.recentLeads.length && box('h_leads') ? html`<h2 class="sec">New leads <span class="r"><span class="muted">${d.counts.leads} total</span>${hideBox('h_leads')}</span></h2>
         <div class="panel rows">${d.recentLeads.map((c) => html`<a class="row" href="#/clients/${c.id}"><div class="main"><b>${c.name}</b><span>${[c.company, c.email, c.phone].filter(Boolean).join(' · ')}</span></div>${pill('lead')}<div class="amt"><small>${fmtDate(c.created_at)}</small></div></a>`)}</div>` : ''}
     `;
   };
@@ -515,7 +527,7 @@
     state.entries[e.id] = e;
     const inc = e.kind === 'income';
     return html`<div class="row click ${inc ? 'posi' : 'neg'}" data-act="edit-entry" data-id="${e.id}" tabindex="0">
-      <div class="main"><b>${e.party || e.client_name || e.category}${e.files ? raw(`<i class="clip">${ICON.clip}</i>`) : ''}</b><span>${[fmtDate(e.date), e.category, e.project_name, e.method, e.note].filter(Boolean).join(' · ')}</span></div>
+      <div class="main"><b>${e.party || e.client_name || e.category}${e.files ? raw(`<i class="clip">${ICON.clip}</i>`) : ''}${e.tax_line && on('f_tax') ? html`<span class="tag ${e.tax_line === 'Accountant to decide' ? 't-review' : ''}">${e.tax_line}</span>` : ''}</b><span>${[fmtDate(e.date), e.category, e.project_name, e.method, e.note].filter(Boolean).join(' · ')}</span></div>
       ${pill(inc ? 'paid' : 'overdue', inc ? 'income' : 'expense')}
       <div class="amt">${inc ? '' : '−'}${money(e.amount_cents)}</div></div>`;
   }
@@ -528,7 +540,7 @@
     return html`
       <div class="head"><div><h1>Books</h1><div class="sub">Cash, checks, Zelle and every expense. Card payments through Stripe are counted automatically in Reports.</div></div>
         <div class="acts">${on('f_bulk') ? html`<button class="btn ghost" data-act="pick-start" data-kind="books">Select</button>` : ''}<button class="btn ghost" data-act="export-books">${raw(ICON.down)}Excel</button>
-          ${can('books', 'edit') ? html`${on('f_uploads') ? html`<button class="btn ghost" data-act="upload" data-hint="">${raw(ICON.upload)}Upload</button>` : ''}${on('f_import') ? html`<button class="btn ghost" data-act="import-bank">${raw(ICON.bank)}Bank statement</button>` : ''}<button class="btn ghost" data-act="new-entry" data-kind="income">${raw(ICON.plus)}Income</button>
+          ${can('books', 'edit') ? html`${on('f_uploads') ? html`<button class="btn ghost" data-act="upload" data-hint="">${raw(ICON.upload)}Upload</button>` : ''}${on('f_import') ? html`<button class="btn ghost" data-act="import-bank">${raw(ICON.bank)}Bank statement</button>` : ''}${on('f_links') && on('f_import') ? html`<button class="btn ghost" data-tx="links">${raw(ICON.link)}Linked sheets</button>` : ''}<button class="btn ghost" data-act="new-entry" data-kind="income">${raw(ICON.plus)}Income</button>
           <button class="btn" data-act="new-entry" data-kind="expense">${raw(ICON.plus)}Expense</button>` : ''}</div></div>
       ${periodBar(books, 'bk')}
       <div class="kpis three">
@@ -536,7 +548,7 @@
         ${kpi('Expenses', money(exp), d.entries.filter((e) => e.kind === 'expense').length + ' entries', 'neg')}
         ${kpi('Difference', money(inc - exp), 'without card payments')}
       </div>
-      ${can('books', 'edit') && (on('f_uploads') || on('f_import')) ? html`<div class="dropzone" data-drop="">${raw(ICON.upload)}<span>${on('f_uploads') ? 'Drop receipts, bills or a bank statement here (PDF, Word, Excel, CSV or photos).' : 'Drop a bank statement here (CSV or Excel).'} ${on('f_import') ? html`<button type="button" class="linkbtn" data-act="imports-list">Past imports</button>` : ''}</span></div>` : ''}
+      ${can('books', 'edit') && (on('f_uploads') || on('f_import')) ? html`<div class="dropzone" data-drop="">${raw(ICON.upload)}<span>${on('f_uploads') ? 'Drop receipts, bills or a bank statement here: any file (PDF, Word, Excel, CSV, photos, QuickBooks .iif or bank .qbo).' : 'Drop a bank statement here (CSV, Excel, QuickBooks .iif or bank .qbo).'} ${on('f_import') ? html`<button type="button" class="linkbtn" data-act="imports-list">Past imports</button>` : ''}</span></div>` : ''}
       <div class="chips" style="margin-top:16px" id="kchips">${[['', 'All'], ['income', 'Income'], ['expense', 'Expenses']].map(([v, l]) => html`<button type="button" data-kf="${v}" class="${books.kind === v ? 'on' : ''}">${l}</button>`)}</div>
       <div class="panel rows" id="klist"></div>`;
   };
@@ -596,6 +608,8 @@
     ['business', 'Business details', 'Name, address and terms on invoices', ICON.books],
     ['team', 'Team sign-in', 'Let team members sign in', ICON.team],
     ['connections', 'Stripe and email', 'Payment alerts, sending your own emails', ICON.card],
+    ...(on('f_links') || on('f_qb') ? [['sync', 'Google Sheets, Excel and QuickBooks', 'Linked sheets, live link, QuickBooks files', ICON.link]] : []),
+    ['home', 'Home page', 'Choose the boxes on the home page', ICON.home],
     ['claude', 'Claude connector', 'Use your own Claude app with this admin', ICON.spark],
     ...(on('f_trash') ? [['trash', 'Trash', 'Bring back things you deleted', ICON.trash, '#/trash']] : []),
     ...(on('f_log') ? [['log', 'Activity log', 'Who changed what, and when', ICON.history, '#/log']] : []),
@@ -630,6 +644,9 @@
         sw('f_uploads', 'Upload files', 'PDF, Word, Excel and photos as expenses, income or bills, and files attached to them'),
         sw('f_import', 'Bank statement import', 'Read a CSV or Excel statement into Books'),
         sw('f_pack', 'Accountant pack', 'Year-end Excel file under Reports'),
+        sw('f_tax', 'Taxes', 'Ready-for-the-accountant checks, owner money and loans, 1099 vendors, inventory count, tax lines'),
+        sw('f_qb', 'QuickBooks files', 'Download the year for QuickBooks Desktop (.iif) or QuickBooks Online (.csv)'),
+        sw('f_links', 'Linked sheets and live link', 'Read rows from Google Sheets, Excel online or a CSV link; a live link for Google Sheets and Excel'),
         sw('f_discounts', 'Discounts on invoices', '% or $ off'),
         sw('f_fields', 'Project and PO number on invoices', 'Printed on the invoice'),
         sw('f_cc', 'CC on invoice emails', ''),
@@ -679,6 +696,15 @@
             <button class="btn ghost sm" data-act="connector-key">Make a new key</button><button class="btn danger sm" data-act="connector-off">Turn off</button></div>`
           : html`<div class="status"><div><b>Not set up.</b> <span>Make a key, then add the connector in your Claude app.</span></div><button class="btn" data-act="connector-key">Make a key</button></div>`)
       ], html`<p class="hint">With the connector, your own Claude app (your plan, no extra cost) can look things up here and, after you approve, add bills, expenses, invoices, tasks and hours. Give it a PDF of a bill and say "add this". Everything it does is in the Activity log.</p>`),
+      sec('home', 'Home page', HOME_BOXES.filter(([k]) => k !== 'h_tax' || on('f_tax')).map(([k, l]) => sw(k, l, '')),
+        html`<p class="hint">Or use Customize on the home page, or the × next to a box.</p>`),
+      ...(on('f_links') || on('f_qb') ? [sec('sync', 'Google Sheets, Excel and QuickBooks', [
+        ...(on('f_links') ? [block('linked sheets google sheets excel onedrive dropbox csv import', html`<div class="status"><div><b>Linked sheets</b> <span>Keep a list in Google Sheets or Excel online and read its new rows into Books.</span></div><button class="btn ghost sm" data-tx="links">${raw(ICON.link)}Linked sheets</button></div>`),
+          block('live link feed importdata google sheets excel from web', d.feed && d.feed.on
+            ? html`<div class="status"><span class="ok">${raw(ICON.ok)}</span><div><b>Live link is on</b> <span>made ${fmtDate(d.feed.created)}, ending in …${d.feed.last4}. Google Sheets and Excel read Books from it.</span></div><button class="btn ghost sm" data-tx="feed-key">New link</button><button class="btn danger sm" data-tx="feed-off">Turn off</button></div>`
+            : html`<div class="status"><div><b>Live link for Google Sheets and Excel</b> <span>Books and the tax summary, always up to date, in your own sheet.</span></div><button class="btn sm" data-tx="feed-key">Make the link</button></div>`)] : []),
+        ...(on('f_qb') ? [block('quickbooks iif qbo desktop online accountant', html`<div class="status"><div><b>QuickBooks files</b> <span>The year for QuickBooks Desktop (.iif) or Online (.csv). Bring QuickBooks in: upload its Excel/CSV export, an .iif file or a bank .qbo file under Books.</span></div><button class="btn ghost sm" data-tx="qb">${raw(ICON.down)}Download</button></div>`)] : [])
+      ])] : []),
       sec('look', 'Look and sign out', [
         block('day night mode theme sign out logout', html`<div class="saverow" style="margin:0"><button class="btn ghost" type="button" data-act="theme" data-label="1">${raw(isLight() ? ICON.moon : ICON.sun)}<span>${isLight() ? 'Night mode' : 'Day mode'}</span></button>
           <button class="btn ghost" type="button" data-act="logout">${raw(ICON.out)}<span>Sign out</span></button></div>`)
@@ -719,7 +745,7 @@
     try {
       state.cfg = await api('settings.save', { settings: { [key]: val } });
       toast('Saved');
-      if (/^f_|^team_login$/.test(key)) { const q0 = $('#setq') ? $('#setq').value : ''; shell(); await route(); if (q0 && $('#setq')) { $('#setq').value = q0; drawSettings(); } }
+      if (/^f_|^h_|^team_login$/.test(key)) { const q0 = $('#setq') ? $('#setq').value : ''; shell(); await route(); if (q0 && $('#setq')) { $('#setq').value = q0; drawSettings(); } }
     } catch (err) {
       toast(err.message, true);
       if (el.type === 'checkbox') el.checked = !val;
@@ -1038,9 +1064,18 @@
 
   const CATS = {
     income: ['Projects', 'Consulting', 'Hardware sales', 'Invoices', 'Other income'],
-    expense: ['Hardware & inventory', 'Shipping & freight', 'Contractors & developers', 'Software & subscriptions', 'Phone & internet', 'Travel', 'Office & supplies', 'Marketing', 'Bank & card fees', 'Taxes & licenses', 'Other']
+    expense: ['Hardware & inventory', 'Shipping & freight', 'Contractors & developers', 'Software & subscriptions', 'Phone & internet', 'Travel', 'Office & supplies', 'Marketing', 'Bank & card fees', 'Professional fees', 'Taxes & licenses', 'Other']
   };
   const METHODS = ['Cash', 'Check', 'Zelle', 'Bank transfer', 'Card', 'Other'];
+  // how money in or out counts for taxes (same list as api/_lib/tax.js). Grouped for the pickers.
+  const COUNTS_AS = {
+    expense: [['In profit', ['Cost of goods sold', 'Contract labor', 'Advertising', 'Office expense', 'Supplies', 'Utilities (phone and internet)', 'Travel', 'Taxes and licenses',
+      'Legal and professional services', 'Software and subscriptions', 'Bank and card fees', 'Other expenses', 'Not deductible']],
+      ['Not in profit', ['Equipment (fixed asset)', 'Inventory on hand (asset)', 'Deposit or prepaid (asset)', 'Owner draw (equity)', 'Loan paid back (liability)']],
+      ['Not sure', ['Accountant to decide']]],
+    income: [['In profit', ['Sales and income']], ['Not in profit', ['Owner capital (equity)', 'Loan received (liability)', 'Not income (transfer or refund)']], ['Not sure', ['Accountant to decide']]]
+  };
+  const countsOptions = (kind, sel, blank) => html`${blank ? html`<option value="">${blank}</option>` : ''}${COUNTS_AS[kind === 'income' ? 'income' : 'expense'].map(([g, ls]) => html`<optgroup label="${g}">${ls.map((l) => html`<option ${raw(l === sel ? 'selected' : '')}>${l}</option>`)}</optgroup>`)}`;
   async function entryForm(kind, id) {
     const e0 = id ? state.entries[id] : { kind, date: today(), method: kind === 'expense' ? 'Card' : 'Zelle' };
     let k = e0.kind || kind || 'expense';
@@ -1053,13 +1088,17 @@
       <div><label for="e-party" id="e-party-l">${k === 'income' ? 'Received from' : 'Paid to'}</label><input id="e-party" maxlength="120" value="${e0.party || ''}"></div>
       <div><label for="e-client">Client (optional)</label><select id="e-client"><option value="">None</option>${(await clientsCache()).map((c) => html`<option value="${c.id}" ${raw(String(c.id) === String(e0.client_id) ? 'selected' : '')}>${c.name}${c.company ? ' · ' + c.company : ''}</option>`)}</select></div>
       ${await projectField(e0.project_id, 'e-project')}
-      <div><label for="e-note">Note</label><input id="e-note" maxlength="1000" value="${e0.note || ''}" placeholder="e.g. receipt #, what it was for"></div>
+      ${on('f_tax') ? html`<div><label for="e-tl">Counts as (for taxes)</label><select id="e-tl"></select></div>` : ''}
+      <div class="grid2"><div><label for="e-ref">Receipt / invoice #</label><input id="e-ref" maxlength="60" value="${e0.ref || ''}"></div>
+        <div><label for="e-note">Note</label><input id="e-note" maxlength="1000" value="${e0.note || ''}" placeholder="what it was for"></div></div>
       ${id ? html`<div><label>Files</label><div id="f-files" class="filesbox"></div></div>` : ''}
     </div>`, html`${id ? html`<button type="button" class="btn danger" id="e-del" style="margin-right:auto">Delete</button>` : ''}<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
     const fillCats = () => {
       const s = $('#e-cat', m.d);
       s.innerHTML = html`${CATS[k].map((x) => html`<option ${raw(e0.category === x ? 'selected' : '')}>${x}</option>`)}${e0.category && !CATS[k].includes(e0.category) && e0.kind === k ? html`<option selected>${e0.category}</option>` : ''}`.s;
       $('#e-party-l', m.d).textContent = k === 'income' ? 'Received from' : 'Paid to';
+      const tl = $('#e-tl', m.d);
+      if (tl) tl.innerHTML = countsOptions(k, e0.kind === k ? e0.tax_line : '', 'As its category says').s;
     };
     fillCats();
     if (id) filesBox(m, 'entry_id', id);
@@ -1075,7 +1114,7 @@
       await busy(m.form.querySelector('[type=submit]'), async () => {
         try {
           await api('entries.save', { id: id ? Number(id) : undefined, kind: k, date: $('#e-date', m.d).value, amount_cents: c, category: $('#e-cat', m.d).value,
-            party: $('#e-party', m.d).value, method: $('#e-method', m.d).value, client_id: $('#e-client', m.d).value ? Number($('#e-client', m.d).value) : null, note: $('#e-note', m.d).value,
+            party: $('#e-party', m.d).value, method: $('#e-method', m.d).value, client_id: $('#e-client', m.d).value ? Number($('#e-client', m.d).value) : null, note: $('#e-note', m.d).value, ref: $('#e-ref', m.d).value, tax_line: $('#e-tl', m.d) ? $('#e-tl', m.d).value : undefined,
             project_id: $('#e-project', m.d) && $('#e-project', m.d).value ? Number($('#e-project', m.d).value) : null });
           m.close(); toast('Saved'); refresh();
         } catch (err) { m.err(err.message); }
@@ -1218,7 +1257,7 @@
     if (!r.ok) throw new Error(d.error || 'Upload failed');
     return d;
   }
-  function pickFiles(multiple, accept = '.pdf,.docx,.xlsx,.csv,.txt,image/*') {
+  function pickFiles(multiple, accept = '') {
     return new Promise((resolve) => {
       const i = document.createElement('input'); i.type = 'file'; i.multiple = multiple; i.accept = accept;
       i.addEventListener('change', () => resolve(Array.from(i.files || [])));
@@ -1253,11 +1292,11 @@
           <div><label for="d-date" id="d-date-l">Date</label><input id="d-date" type="date" value="${g.date || today()}"></div></div>
         <div class="grid2"><div><label for="d-party" id="d-party-l">Paid to</label><input id="d-party" maxlength="120" value="${g.party || ''}"></div>
           <div><label for="d-cat">Category</label><select id="d-cat"></select></div></div>
-        <div class="grid2 bill-only"><div><label for="d-num">Their bill / invoice #</label><input id="d-num" maxlength="60" value="${g.number || ''}"></div>
+        <div class="grid2"><div><label for="d-num">Receipt / bill / invoice #</label><input id="d-num" maxlength="60" value="${g.number || ''}"></div>
           <div><label for="d-due">Due date</label><input id="d-due" type="date" value="${g.due_date || ''}"></div></div>
         <div class="not-bill"><label for="d-method">Paid by</label><select id="d-method">${METHODS.map((x) => html`<option>${x}</option>`)}</select></div>
         <div id="d-proj"></div>
-        <div><label for="d-note">Note</label><input id="d-note" maxlength="1000" value="${g.number ? (k === 'bill' ? '' : '#' + g.number) : ''}"></div>
+        <div><label for="d-note">Note</label><input id="d-note" maxlength="1000" value=""></div>
       </div>`, html`<button type="button" class="btn ghost" data-close>Skip</button><button class="btn" type="submit">Save</button>`);
       m.d.addEventListener('close', () => resolve(null));
       projectField('', 'd-project').then((h) => { const b = $('#d-proj', m.d); if (b) b.innerHTML = h ? h.s : ''; });
@@ -1285,7 +1324,7 @@
             if (k === 'bill') await api('bills.save', { vendor: $('#d-party', m.d).value || 'Supplier', number: $('#d-num', m.d).value, amount_cents: c, category: $('#d-cat', m.d).value,
               bill_date: $('#d-date', m.d).value, due_date: $('#d-due', m.d).value, project_id: proj, note: $('#d-note', m.d).value, file_id: r.file.id });
             else await api('entries.save', { kind: k, date: $('#d-date', m.d).value, amount_cents: c, category: $('#d-cat', m.d).value, party: $('#d-party', m.d).value,
-              method: $('#d-method', m.d).value, note: $('#d-note', m.d).value, project_id: proj, file_id: r.file.id });
+              method: $('#d-method', m.d).value, note: $('#d-note', m.d).value, ref: $('#d-num', m.d).value, project_id: proj, file_id: r.file.id });
             m.close(); toast(k === 'bill' ? 'Bill saved with the file' : 'Saved with the file'); refresh(); resolve(true);
           } catch (err) { m.err(err.message); }
         });
@@ -1372,7 +1411,8 @@
   function accountantPack() {
     const y = new Date().getFullYear();
     const m = modal('Year-end pack for the accountant', html`<div class="fields">
-      <p class="soft">One Excel file: profit and loss, every transaction, income and expenses, bills, team pay with the 1099 check, and the year's invoices.</p>
+      <p class="soft">One Excel file: profit and loss, every transaction, income and expenses, bills, team pay with the 1099 check, and the year's invoices${on('f_tax') ? ', plus the tax summary, owner money, the 1099 check of everyone paid, and missing receipts' : ''}.</p>
+      ${on('f_qb') ? html`<p class="hint">For QuickBooks: <button type="button" class="linkbtn" data-close data-tx="qb">QuickBooks files</button></p>` : ''}
       <div><label for="ap-y">Year</label><select id="ap-y">${[y, y - 1, y - 2, y - 3].map((v) => html`<option ${raw(v === (new Date().getMonth() < 3 ? y - 1 : y) ? 'selected' : '')}>${v}</option>`)}</select></div></div>`,
       html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">${raw(ICON.down)}Download</button>`);
     m.form.addEventListener('submit', (e) => { e.preventDefault(); location.href = '/api/export?year=' + encodeURIComponent($('#ap-y', m.d).value); m.close(); toast('Making the file… it downloads in a moment'); });
@@ -1424,7 +1464,7 @@
   const PICK_ACTS = {
     invoices: () => [['bulk-remind', 'Email reminder', 'invoices'], ['bulk-paid', 'Mark paid', 'invoices'], ['bulk-void', 'Void', 'invoices'], ['bulk-export', 'Excel', '']],
     bills: () => [['bulk-pay', 'Pay in full', 'bills'], ['bulk-delete', 'Delete', 'bills'], ['bulk-export', 'Excel', '']],
-    books: () => [['bulk-category', 'Change category', 'books'], ['bulk-project', 'Set project', 'books'], ['bulk-delete', 'Delete', 'books'], ['bulk-export', 'Excel', '']]
+    books: () => [['bulk-category', 'Change category', 'books'], ...(on('f_tax') ? [['bulk-taxline', 'Counts as', 'books']] : []), ['bulk-project', 'Set project', 'books'], ['bulk-delete', 'Delete', 'books'], ['bulk-export', 'Excel', '']]
   };
   function pickStart(kind) {
     state.pick = { kind, ids: new Set() };
@@ -1521,6 +1561,19 @@
         if (!confirm(`Delete ${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}?${undoNote()}`)) return;
         const r = await bulkRun('Deleting', ids, (id) => api('entries.delete', { id: Number(id) }));
         toast(`${r.ok} deleted`, !!r.bad, r.out.map((x) => x.trash_id)); return refresh();
+      }
+      if (a === 'bulk-taxline') {
+        const kinds = new Set(ids.map((id) => (state.entries[id] || {}).kind));
+        const kind = kinds.size === 1 ? [...kinds][0] : 'both';
+        const opts = kind === 'both' ? html`<option value="">As its category says</option><option>Accountant to decide</option>` : countsOptions(kind, '', 'As its category says');
+        const m = modal('How they count for taxes', html`<div class="fields"><p class="soft">${ids.length} entr${ids.length === 1 ? 'y' : 'ies'}${kind === 'both' ? ' (money in and out together: pick only money in or only money out for more choices)' : ''}</p>
+          <div><label for="bk-t">Counts as</label><select id="bk-t">${opts}</select></div></div>`,
+          html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Change</button>`);
+        m.form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          try { const r = await api('entries.bulk', { ids: ids.map(Number), tax_line: $('#bk-t', m.d).value }); m.close(); pickEnd(); toast(`${r.count} changed`); refresh(); } catch (err) { m.err(err.message); }
+        });
+        return;
       }
       if (a === 'bulk-category' || a === 'bulk-project') {
         const proj = a === 'bulk-project';
@@ -2225,7 +2278,7 @@
         case 'pick-start': return state.pick.kind ? pickEnd() : pickStart(t.dataset.kind);
         case 'pick-end': return pickEnd();
         case 'upload': { const files = await pickFiles(true); if (files.length) await uploadFiles(files, t.dataset.hint || ''); return; }
-        case 'import-bank': { const files = await pickFiles(false, '.csv,.xlsx,.txt'); if (files.length) await uploadFiles(files, 'import'); return; }
+        case 'import-bank': { const files = await pickFiles(false, '.csv,.tsv,.xlsx,.xls,.txt,.iif,.qbo,.ofx,.qfx'); if (files.length) await uploadFiles(files, 'import'); return; }
         case 'imports-list': return importsList();
         case 'accountant-pack': return accountantPack();
         case 'pick-all': {
@@ -2233,7 +2286,7 @@
           state.pick.ids = state.pick.ids.size === all.length ? new Set() : new Set(all.map(String));
           redrawPicked(); return pickBar();
         }
-        case 'bulk-remind': case 'bulk-paid': case 'bulk-void': case 'bulk-export': case 'bulk-pay': case 'bulk-delete': case 'bulk-category': case 'bulk-project':
+        case 'bulk-remind': case 'bulk-paid': case 'bulk-void': case 'bulk-export': case 'bulk-pay': case 'bulk-delete': case 'bulk-category': case 'bulk-project': case 'bulk-taxline':
           return bulkAct(a, t);
         case 'undo': {
           $('#toast').className = 'toast';
@@ -2421,6 +2474,273 @@
   const view = () => $('#view');
   const afterRender = () => { drawClients(); drawInvoices(); drawBooks(); drawBills(); drawProjects(); drawSettings(); paintBars(view()); };
   document.addEventListener('rendered', afterRender, true);
+
+  // one set of books here (the tax code is shared with the Bizmo admin, which has parts)
+  const PART = { devices: 'GO GETTER' };
+  const partTag = () => '';
+  // ---------------------------------------------------------------- taxes: ready for the accountant (f_tax)
+  const OWNER_LABEL = { contribution: 'Owner put money in', draw: 'Owner took money out', loan_in: 'Loan received', loan_repay: 'Loan paid back' };
+  const VTYPES = [['unknown', 'Not known yet'], ['individual', 'Individual / sole proprietor'], ['llc', 'LLC'], ['partnership', 'Partnership'], ['corporation', 'Corporation'], ['foreign', 'Outside the US (W-8, no 1099)']];
+  const taxSt = { year: new Date().getMonth() < 4 ? new Date().getFullYear() - 1 : new Date().getFullYear(), part: 'all', open: '' };
+  const yearsList = () => { const y = new Date().getFullYear(); return [y, y - 1, y - 2, y - 3, y - 4]; };
+  function checkRow(c, withShow) {
+    return html`<div class="row"><span class="ic ${c.ok ? 'g' : c.key === 'inventory' || c.key === 'w9' ? 'r' : 'a'}">${raw(c.ok ? ICON.ok : ICON.alert)}</span>
+      <div class="main"><b>${c.title}</b><span>${c.ok ? 'Done' : `${c.count} to fix${c.cents ? ' · ' + money(c.cents) : ''}${c.hint ? ' · ' + c.hint : ''}`}</span></div>
+      <div class="amt"></div><div class="acts">${!c.ok && withShow ? html`<button type="button" class="btn ghost sm" data-tx="fix" data-k="${c.key}">${['receipts', 'other', 'method', 'review'].includes(c.key) ? (taxSt.open === c.key ? 'Hide' : 'Show') : 'Fix'}</button>` : ''}</div></div>`;
+  }
+  VIEWS.tax = async () => {
+    const d = await api('tax.summary', { year: taxSt.year, part: taxSt.part });
+    state.tax = d;
+    const miss = d.missing[taxSt.open] || [];
+    miss.forEach((e) => { state.entries[e.id] = e; });
+    const ownerNet = d.owner.totals.contribution + d.owner.totals.loan_in - d.owner.totals.draw - d.owner.totals.loan_repay;
+    const editTax = can('books', 'edit');
+    return html`
+      <div class="head"><div><h1>Taxes</h1><div class="sub">Get ${d.year} ready for the accountant. This is bookkeeping help, not tax advice.</div></div>
+        <div class="acts downloads">
+          <select data-tx-year style="max-width:120px">${yearsList().map((y) => html`<option ${raw(y === d.year ? 'selected' : '')}>${y}</option>`)}</select>
+          ${on('f_pack') && on('f_reports') ? html`<button class="btn ghost" data-act="accountant-pack">${raw(ICON.books)}Accountant pack</button>` : ''}
+          ${on('f_qb') ? html`<button class="btn ghost" data-tx="qb">${raw(ICON.down)}QuickBooks</button>` : ''}</div></div>
+      ${false && d.parts.length > 1 ? html`<div class="chips">${[['all', 'Both parts'], ...d.parts.map((p) => [p, PART[p]])].map(([v, l]) => html`<button type="button" data-tx="part" data-v="${v}" class="${taxSt.part === v ? 'on' : ''}">${l}</button>`)}</div>` : ''}
+      <div class="panel pad readybox">
+        <div class="readyhead"><b>Ready for the accountant: ${d.ready.pct}%</b><span class="muted">${d.ready.done} of ${d.ready.total} checks done</span></div>
+        <div class="progress"><i data-w="${d.ready.pct}"></i></div></div>
+      <div class="panel rows todo" style="margin-top:12px">${d.checks.map((c) => checkRow(c, editTax))}</div>
+      ${miss.length ? html`<h2 class="sec">${d.checks.find((c) => c.key === taxSt.open).title} <span class="muted">click one to fix it${miss.length >= 300 ? ' · first 300' : ''}</span></h2>
+        <div class="panel rows">${miss.map(entryRow)}</div>` : ''}
+      <div class="kpis" style="margin-top:20px">
+        ${kpi('Income', money(d.income), 'recorded in Books', 'pos')}
+        ${kpi('Cost of goods sold', money(d.cogs.total), d.cogs.entered || !d.cogs.purchases ? 'inventory counted' : 'inventory not counted yet', d.cogs.entered || !d.cogs.purchases ? '' : 'neg')}
+        ${kpi('Other expenses', money(d.expenses.deductible), d.expenses.byLine.length + ' tax lines')}
+        ${kpi('Owner money (not in profit)', money(ownerNet), 'in minus out, with loans')}
+      </div>
+      <div class="cols" style="margin-top:4px">
+        <div><h2 class="sec">Expenses by tax line ${editTax ? html`<button class="linkbtn" data-tx="map">How each category counts</button>` : ''}</h2>
+          <div class="panel tablewrap"><table class="t"><thead><tr><th>Tax line</th><th>From</th><th class="n">Amount</th></tr></thead><tbody>
+            ${d.expenses.byLine.length ? d.expenses.byLine.map((l) => html`<tr><td><b>${l.line}</b></td><td class="muted wrap">${l.categories.map((x) => x.category).join(', ')}</td><td class="n">${money(l.cents)}</td></tr>`) : html`<tr><td colspan="3" class="muted">No expenses in ${d.year}.</td></tr>`}
+          </tbody></table></div></div>
+        <div><h2 class="sec">Inventory and cost of goods sold ${editTax ? html`<button class="linkbtn" data-tx="inv">Enter the count</button>` : ''}</h2>
+          <div class="panel pl">
+            <div class="l sub"><span>Inventory on January 1</span><span class="num">${money(d.cogs.begin)}</span></div>
+            <div class="l sub"><span>Bought this year (cost of goods lines)</span><span class="num">${money(d.cogs.purchases)}</span></div>
+            <div class="l sub"><span>Inventory on December 31</span><span class="num">${d.cogs.entered ? '−' + money(d.cogs.end) : 'not counted'}</span></div>
+            <div class="l t"><span>Cost of goods sold</span><span class="num">${money(d.cogs.total)}</span></div></div>
+          <p class="hint">Count what is still in stock on December 31 (hardware for clients) at what you paid for it.</p></div>
+      </div>
+      <h2 class="sec">Not in profit <span class="muted">equipment, stock, owner money, loans, transfers</span></h2>
+      <div class="panel tablewrap"><table class="t"><thead><tr><th>Counts as</th><th>From</th><th class="n">Money out</th><th class="n">Money in</th></tr></thead><tbody>
+        ${d.balance.length ? d.balance.map((l) => html`<tr><td><b>${l.line}</b></td><td class="muted wrap">${l.categories.map((x) => x.category).join(', ')}</td><td class="n">${l.out ? money(l.out) : ''}</td><td class="n">${l.in ? money(l.in) : ''}</td></tr>`)
+          : html`<tr><td colspan="4" class="muted">Nothing. Everything in Books counts in profit. To change that, set it on an entry ("Counts as"), on several at once (Select in Books), or for a whole category.</td></tr>`}
+      </tbody></table></div>
+      <p class="hint">Enter everything simply as money in or out. Here you, or your accountant with a sign-in of their own, decide what each one is: "Accountant to decide" keeps it apart until then.</p>
+      <h2 class="sec">Owner money and loans ${editTax ? html`<button class="btn ghost sm" data-tx="owner">${raw(ICON.plus)}Add</button>` : ''}</h2>
+      <div class="panel rows">${d.owner.list.length ? d.owner.list.map((o) => html`<div class="row ${editTax ? 'click' : ''}" ${raw(editTax ? `data-tx="owner" data-id="${o.id}" tabindex="0"` : '')}>
+          <div class="main"><b>${OWNER_LABEL[o.kind]}${partTag(o.part)}</b><span>${[fmtDate(o.date), o.person, o.method, o.note].filter(Boolean).join(' · ')}</span></div>
+          ${pill(o.kind === 'contribution' || o.kind === 'loan_in' ? 'paid' : 'open', o.kind === 'contribution' || o.kind === 'loan_in' ? 'in' : 'out')}
+          <div class="amt">${money(o.amount_cents)}</div></div>`) : empty('Money the owner puts in or takes out, and loans, go here, not in Books. They are not income or expenses.')}</div>
+      <h2 class="sec">People and companies paid (1099 check) <span class="muted">$600 or more, not by card</span></h2>
+      <div class="panel tablewrap"><table class="t"><thead><tr><th>Paid to</th><th>Type</th><th class="n">Paid</th><th class="n">By card</th><th>1099</th><th>W-9</th></tr></thead><tbody>
+        ${d.vendors.length ? d.vendors.map((v) => html`<tr class="${editTax ? 'click' : ''}" ${raw(editTax ? `data-tx="vendor" data-name="${esc(v.name)}"` : '')}><td><b>${v.name}</b>${v.worker ? html`<span class="tag">team</span>` : ''}</td>
+          <td>${(VTYPES.find((x) => x[0] === v.type) || VTYPES[0])[1]}</td><td class="n">${money(v.paid)}</td><td class="n muted">${v.card ? money(v.card) : ''}</td>
+          <td>${v.needs_1099 ? pill('open', 'needed') : html`<span class="muted">no</span>`}</td><td>${v.w9 ? pill('paid', 'on file') : v.needs_1099 ? pill('overdue', 'missing') : ''}</td></tr>`) : html`<tr><td colspan="6" class="muted">Nobody was paid in ${d.year}.</td></tr>`}
+      </tbody></table></div>
+      ${d.bills_unpaid ? html`<p class="hint">Supplier bills still unpaid on Dec 31: <b>${money(d.bills_unpaid)}</b>. They count as expenses when they are paid.</p>` : ''}
+      <p class="hint">Owner money is kept out of profit. Payments by card are left out of the 1099 check because the card company reports them. Check everything with your accountant.</p>`;
+  };
+
+  function ownerForm(id) {
+    const o = id ? state.tax.owner.list.find((x) => String(x.id) === String(id)) : { kind: 'contribution', date: today(), method: 'Bank transfer', part: taxSt.part === 'all' ? 'devices' : taxSt.part };
+    const m = modal(id ? 'Edit owner money' : 'Owner money or a loan', html`<div class="fields">
+      <div><label for="o-kind">What is it</label><select id="o-kind">${Object.entries(OWNER_LABEL).map(([k, l]) => html`<option value="${k}" ${raw(o.kind === k ? 'selected' : '')}>${l}</option>`)}</select></div>
+      <div class="grid2"><div><label for="o-amt">Amount</label><input id="o-amt" inputmode="decimal" placeholder="0.00" value="${o.amount_cents ? plain(o.amount_cents) : ''}"></div>
+        <div><label for="o-date">Date</label><input id="o-date" type="date" value="${o.date}"></div></div>
+      <div class="grid2"><div><label for="o-person">Who (owner or lender)</label><input id="o-person" maxlength="120" value="${o.person || ''}"></div>
+        <div><label for="o-method">How</label><select id="o-method">${METHODS.map((x) => html`<option ${raw(o.method === x ? 'selected' : '')}>${x}</option>`)}</select></div></div>
+      ${false ? html`<div><label for="o-part">Part</label><select id="o-part">${Object.entries(PART).map(([k, l]) => html`<option value="${k}" ${raw(o.part === k ? 'selected' : '')}>${l}</option>`)}</select></div>` : ''}
+      <div><label for="o-note">Note</label><input id="o-note" maxlength="1000" value="${o.note || ''}"></div>
+      <p class="hint">Not income and not an expense, so it stays out of profit. The accountant needs it for the balance sheet.</p>
+    </div>`, html`${id ? html`<button type="button" class="btn danger" id="o-del" style="margin-right:auto">Delete</button>` : ''}<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    if (id) $('#o-del', m.d).addEventListener('click', async () => {
+      if (!sure('Delete this?')) return;
+      try { const r = await api('tax.owner.delete', { id: Number(id) }); m.close(); toast('Deleted', false, r.trash_id); refresh(); } catch (err) { m.err(err.message); }
+    });
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      const c = parseMoney($('#o-amt', m.d).value);
+      if (isNaN(c) || c <= 0) return m.err('Enter an amount, like 5000.00');
+      await busy(m.form.querySelector('[type=submit]'), async () => {
+        try {
+          await api('tax.owner.save', { id: id ? Number(id) : undefined, kind: $('#o-kind', m.d).value, amount_cents: c, date: $('#o-date', m.d).value, person: $('#o-person', m.d).value,
+            method: $('#o-method', m.d).value, note: $('#o-note', m.d).value, part: $('#o-part', m.d) ? $('#o-part', m.d).value : undefined });
+          m.close(); toast('Saved'); refresh();
+        } catch (err) { m.err(err.message); }
+      });
+    });
+  }
+  function vendorForm(name) {
+    const v = state.tax.vendors.find((x) => x.name === name) || { name, type: 'unknown', w9: false, decided: false };
+    const m = modal('1099 details', html`<div class="fields">
+      <p class="soft"><b>${v.name}</b> · paid ${money(v.paid || 0)} in ${state.tax.year}${v.card ? ` (plus ${money(v.card)} by card)` : ''}</p>
+      <div><label for="v-type">Type (from their W-9)</label><select id="v-type">${VTYPES.map(([k, l]) => html`<option value="${k}" ${raw(v.type === k ? 'selected' : '')}>${l}</option>`)}</select></div>
+      <label class="ck"><input type="checkbox" id="v-w9" ${raw(v.w9 ? 'checked' : '')}><span>W-9 on file</span></label>
+      <div><label for="v-1099">Needs a 1099-NEC</label><select id="v-1099"><option value="">Decide by itself ($600 or more, not a corporation, not abroad)</option>
+        <option value="yes" ${raw(v.decided && v.needs_1099 ? 'selected' : '')}>Yes</option><option value="no" ${raw(v.decided && !v.needs_1099 ? 'selected' : '')}>No</option></select></div>
+      <div><label for="v-note">Note</label><input id="v-note" maxlength="500" value="${v.note || ''}" placeholder="e.g. W-9 in the email of Jan 5"></div>
+      <p class="hint">Keep the W-9 itself as a file (attach it to one of their payments). The tax ID is not stored here.</p>
+    </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      const n = $('#v-1099', m.d).value;
+      try { await api('tax.vendor.save', { name: v.name, type: $('#v-type', m.d).value, w9: $('#v-w9', m.d).checked, needs_1099: n === 'yes' ? true : n === 'no' ? false : null, note: $('#v-note', m.d).value }); m.close(); toast('Saved'); refresh(); }
+      catch (err) { m.err(err.message); }
+    });
+  }
+  function invForm() {
+    const d = state.tax;
+    const parts = false ? (taxSt.part === 'all' ? d.parts : [taxSt.part]) : ['devices'];
+    const val = (p, k) => { const r = d.cogs.years.find((x) => x.part === p); return r && r[k] !== null && r[k] !== undefined ? plain(r[k]) : ''; };
+    const m = modal(`Inventory count ${d.year}`, html`<div class="fields">
+      <p class="soft">What was in stock, at what you paid for it. December 31 also becomes next year's January 1.</p>
+      ${parts.map((p) => html`${parts.length > 1 ? html`<b>${PART[p]}</b>` : ''}<div class="grid2"><div><label>On January 1, ${d.year}</label><input data-inv-b="${p}" inputmode="decimal" placeholder="0.00" value="${val(p, 'inv_begin_cents')}"></div>
+        <div><label>On December 31, ${d.year}</label><input data-inv-e="${p}" inputmode="decimal" placeholder="0.00" value="${val(p, 'inv_end_cents')}"></div></div>`)}
+    </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      const num = (s) => { s = String(s || '').trim(); if (!s) return null; const c = parseMoney(s); if (isNaN(c) || c < 0) throw new Error('Enter amounts like 12500.00 (or leave empty)'); return c; };
+      try {
+        for (const p of parts) await api('tax.year.save', { year: d.year, part: p, inv_begin_cents: num($(`[data-inv-b="${p}"]`, m.d).value), inv_end_cents: num($(`[data-inv-e="${p}"]`, m.d).value) });
+        m.close(); toast('Saved'); refresh();
+      } catch (err) { m.err(err.message); }
+    });
+  }
+  function mapForm() {
+    const d = state.tax;
+    const row = (key, label, kind) => html`<div class="grid2"><div style="align-self:center"><b>${label}</b></div><div><select data-map-cat="${key}">${countsOptions(kind, d.map[key] || (kind === 'income' ? 'Sales and income' : 'Other expenses'))}</select></div></div>`;
+    const outCats = Array.from(new Set([...CATS.expense, ...Object.keys(d.map).filter((k) => !k.startsWith('in:'))]));
+    const inCats = Array.from(new Set([...CATS.income, ...Object.keys(d.map).filter((k) => k.startsWith('in:')).map((k) => k.slice(3))]));
+    const m = modal('How each category counts', html`<div class="fields">
+      <p class="soft">Each entry counts the way its category says, unless "Counts as" is set on the entry itself.</p>
+      <b>Money out</b>${outCats.map((c) => row(c, c, 'expense'))}
+      <b style="margin-top:8px">Money in</b>${inCats.map((c) => row('in:' + c, c, 'income'))}
+      <p class="hint">Not sure? Pick "Accountant to decide": those entries are listed apart until the accountant sets them. "Not deductible" stays in the books but out of the expense total.</p>
+    </div>`, html`<button type="button" class="btn ghost" data-close>Cancel</button><button class="btn" type="submit">Save</button>`);
+    m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      const map = {}; $$('[data-map-cat]', m.d).forEach((x) => { map[x.dataset.mapCat] = x.value; });
+      try { await api('tax.map.save', { map }); m.close(); toast('Saved'); refresh(); } catch (err) { m.err(err.message); }
+    });
+  }
+  function qbForm() {
+    const m = modal('QuickBooks files for the accountant', html`<div class="fields">
+      <div><label for="qb-y">Year</label><select id="qb-y">${yearsList().map((v) => html`<option ${raw(v === taxSt.year ? 'selected' : '')}>${v}</option>`)}</select></div>
+      <div class="panel rows flat">
+        <div class="row"><div class="main"><b>QuickBooks Desktop (.iif)</b><span>In QuickBooks: File → Utilities → Import → IIF Files. Accounts and classes are made by themselves.</span></div><span></span><div class="acts"><button type="button" class="btn sm" data-qb="iif">${raw(ICON.down)}Download</button></div></div>
+        <div class="row"><div class="main"><b>QuickBooks Online (.csv)</b><span>Settings → Import data → Journal entries. Make the accounts first (list below).</span></div><span></span><div class="acts"><button type="button" class="btn sm" data-qb="qbo">${raw(ICON.down)}Download</button></div></div>
+        <div class="row"><div class="main"><b>Accounts list (.csv)</b><span>The accounts the files use, for QuickBooks Online: Settings → Import data → Accounts.</span></div><span></span><div class="acts"><button type="button" class="btn ghost sm" data-qb="qbo-accounts">${raw(ICON.down)}Download</button></div></div>
+      </div>
+      <p class="hint">Every Books entry, owner money and loans, and Stripe payments if used. Expenses go to the tax lines set on the Taxes page${false ? '; Devices and Cellular become QuickBooks classes' : ''}. Import into a test company first if you are not sure.</p>
+    </div>`, html`<button type="button" class="btn ghost" data-close>Close</button>`);
+    m.d.addEventListener('click', (e) => { const b = e.target.closest('[data-qb]'); if (!b) return; location.href = `/api/export?year=${encodeURIComponent($('#qb-y', m.d).value)}&format=${b.dataset.qb}`; toast('Making the file… it downloads in a moment'); });
+  }
+
+  // ---------------------------------------------------------------- linked sheets (Google Sheets, Excel online, any CSV link) and the live feed
+  async function linksForm() {
+    const d = await api('links.list');
+    const edit = can('books', 'edit');
+    const m = modal('Linked sheets', html`<div class="fields">
+      <p class="soft">Keep your list in Google Sheets or Excel, and read the new rows into Books whenever you want. Rows already in Books are found and left out.</p>
+      <div class="panel rows flat">${d.links.length ? d.links.map((l) => html`<div class="row"><div class="main"><b>${l.name}</b><span>${l.last_sync ? 'Last read ' + fmtDate(l.last_sync) : 'Not read yet'} · ${l.rows_in_books} rows in Books</span></div><span></span>
+        <div class="acts">${edit ? html`<button type="button" class="btn sm" data-lk="sync" data-id="${l.id}">Get new rows</button><button type="button" class="btn ghost sm" data-lk="del" data-id="${l.id}">Remove</button>` : ''}</div></div>`) : empty('No linked sheets yet.')}</div>
+      ${edit ? html`<b style="margin-top:6px">Link a sheet</b>
+        <div><label for="lk-name">Name</label><input id="lk-name" maxlength="80" placeholder="e.g. Office expenses 2026"></div>
+        <div><label for="lk-url">Link</label><input id="lk-url" maxlength="1000" placeholder="https://docs.google.com/spreadsheets/d/…"></div>
+        <p class="hint">Google Sheets: Share → "Anyone with the link can view", copy the link (on the tab you want). Excel online, OneDrive, Dropbox or any CSV link work too. The sheet needs a Date column and an Amount (or Debit / Credit) column.</p>` : ''}
+    </div>`, html`<button type="button" class="btn ghost" data-close>Close</button>${edit ? html`<button class="btn" type="submit">Add link</button>` : ''}`);
+    m.d.addEventListener('click', async (e) => {
+      const b = e.target.closest('[data-lk]'); if (!b) return;
+      if (b.dataset.lk === 'del') { if (!confirm('Remove this link? What was already read into Books stays.')) return; await api('links.delete', { id: Number(b.dataset.id) }); m.close(); return linksForm(); }
+      let up;
+      try { up = await busy(b, () => api('links.sync', { id: Number(b.dataset.id) })); } catch (err) { return m.err(err.message); }
+      m.close(); await importFlow(up);
+    });
+    if (edit) m.form.addEventListener('submit', async (ev) => {
+      ev.preventDefault(); m.err('');
+      try {
+        const r = await api('links.save', { name: $('#lk-name', m.d).value, url: $('#lk-url', m.d).value });
+        m.close(); toast('Linked. Reading it now…');
+        try { await importFlow(await api('links.sync', { id: r.id })); } catch (err) { toast(err.message, true); }
+      } catch (err) { m.err(err.message); }
+    });
+  }
+  function feedShow(token) {
+    const base = location.origin + '/api/export?feed=' + token;
+    const y = new Date().getFullYear();
+    const m = modal('Live link for Google Sheets and Excel', html`<div class="fields">
+      <p class="soft">Copy these now: the secret part is shown only once. Anyone with the link can see the numbers, so keep it to yourself and your accountant.</p>
+      <div><label>Google Sheets: paste in cell A1 (Books ${y})</label><div class="copyrow"><input readonly value="${`=IMPORTDATA("${base}&what=books&year=${y}")`}"><button type="button" class="btn sm" data-copy>Copy</button></div></div>
+      <div><label>Tax summary ${y}</label><div class="copyrow"><input readonly value="${`=IMPORTDATA("${base}&what=tax&year=${y}")`}"><button type="button" class="btn sm" data-copy>Copy</button></div></div>
+      <div><label>Excel: Data → From Web, paste this</label><div class="copyrow"><input readonly value="${base}&what=books&year=${y}"><button type="button" class="btn sm" data-copy>Copy</button></div></div>
+      <p class="hint">Change the year in the link for another year, or use year=all. Google Sheets refreshes it by itself about every hour; in Excel press Refresh.</p>
+    </div>`, html`<button type="button" class="btn" data-close>Done</button>`);
+    m.d.addEventListener('click', (e) => { const b = e.target.closest('[data-copy]'); if (b) { copy(b.previousElementSibling.value); toast('Copied'); } });
+  }
+
+  // ---------------------------------------------------------------- home page: choose the boxes
+  const HOME_BOXES = [['h_kpis', 'Money this month'], ['h_tax', 'Ready for the accountant (Taxes)'], ['h_news', "What's new"], ['h_todo', 'To do'], ['h_quick', 'Quick buttons'],
+    ['h_money', 'Waiting to be paid and latest payments'], ['h_bills', 'Bills to pay'], ['h_leads', 'New leads']];
+  async function customizeHome() {
+    if (!state.cfg) state.cfg = await api('settings.get');
+    const s = state.cfg.settings;
+    const m = modal('Customize the home page', html`<div class="fields">
+      <p class="soft">Pick the boxes you want to see. Nothing is deleted; you can add a box back any time.</p>
+      <div class="panel">${HOME_BOXES.filter(([k]) => k !== 'h_tax' || on('f_tax')).map(([k, l]) => html`<label class="setrow"><div><b>${l}</b></div><span class="switch"><input type="checkbox" data-hb="${k}" ${raw(s[k] !== false ? 'checked' : '')}><i></i></span></label>`)}</div>
+    </div>`, html`<button type="button" class="btn" data-close>Done</button>`);
+    m.d.addEventListener('change', async (e) => {
+      const el = e.target.closest('[data-hb]'); if (!el) return;
+      try { state.cfg = await api('settings.save', { settings: { [el.dataset.hb]: el.checked } }); refresh(); } catch (err) { toast(err.message, true); el.checked = !el.checked; }
+    });
+  }
+  // a box on the home page can be taken off right there
+  const hideBox = (k) => html`<button type="button" class="linkbtn hidebox" data-hide-box="${k}" title="Take this off the home page" aria-label="Take this off the home page">${raw(ICON.no)}</button>`;
+
+  document.addEventListener('change', (e) => {
+    if (e.target.matches && e.target.matches('[data-tx-year]')) { taxSt.year = Number(e.target.value); taxSt.open = ''; refresh(); }
+  });
+  document.addEventListener('click', async (e) => {
+    const hb = e.target.closest && e.target.closest('[data-hide-box]');
+    if (hb) {
+      try { state.cfg = await api('settings.save', { settings: { [hb.dataset.hideBox]: false } }); toast('Taken off. Customize brings it back.'); refresh(); } catch (err) { toast(err.message, true); }
+      return;
+    }
+    const t = e.target.closest && e.target.closest('[data-tx]');
+    if (!t) return;
+    e.preventDefault();
+    try {
+      switch (t.dataset.tx) {
+        case 'part': taxSt.part = t.dataset.v; taxSt.open = ''; return refresh();
+        case 'fix': {
+          const k = t.dataset.k;
+          if (['receipts', 'other', 'method', 'review'].includes(k)) { taxSt.open = taxSt.open === k ? '' : k; return refresh(); }
+          if (k === 'inventory') return invForm();
+          if (k === 'w9' || k === 'unknown') { const v = state.tax.vendors.find((x) => x.needs_1099 && (k === 'w9' ? !x.w9 : x.type === 'unknown')); if (v) return vendorForm(v.name); }
+          return;
+        }
+        case 'owner': return ownerForm(t.dataset.id);
+        case 'vendor': return vendorForm(t.dataset.name);
+        case 'inv': return invForm();
+        case 'map': return mapForm();
+        case 'qb': return qbForm();
+        case 'links': return linksForm();
+        case 'customize': return customizeHome();
+        case 'tax-home': location.hash = '#/tax'; return;
+        case 'feed-key': {
+          if (state.cfg && state.cfg.feed && state.cfg.feed.on && !confirm('Make a new link? The old link stops working right away.')) return;
+          const r = await busy(t, () => api('feed.key')); feedShow(r.token); state.cfg = await api('settings.get'); return;
+        }
+        case 'feed-off': { if (!confirm('Turn off the live link? Sheets that use it stop updating.')) return; await api('feed.off'); toast('Live link turned off'); return refresh(); }
+      }
+    } catch (err) { toast(err.message, true); }
+  });
 
   // client page lives under #/clients/ID
   VIEWS.clients_ = VIEWS.clients;

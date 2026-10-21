@@ -412,3 +412,22 @@ details.more summary{cursor:pointer;color:var(--soft);font-size:13px}
 body:has(.bulkbar) .toast{bottom:92px}
 @media (max-width:900px){body:has(.bulkbar) .toast{bottom:150px}}
 .filesbox .linkbtn{justify-self:start}
+/* taxes, home boxes, linked sheets */
+.todo .ic.g{background:var(--green-bg,var(--card-2));color:var(--green)}
+.readybox{display:grid;gap:10px}
+.readyhead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap}
+.readyhead b{font-size:15px}
+.readybox .progress{height:10px}
+a.readybox{color:inherit}
+h2.sec .r{display:flex;align-items:center;gap:8px}
+.boxhead{display:flex;justify-content:flex-end;margin:6px 0 4px}
+.hidebox{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:6px;color:var(--muted);opacity:.55}
+.hidebox:hover{opacity:1;background:var(--card-2)}
+.hidebox svg{width:14px;height:14px}
+.copyrow{display:flex;gap:8px}
+.copyrow input{flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+table.t td.wrap{white-space:normal;font-size:13px}
+table.t tr.click{cursor:pointer}
+table.t tr.click:hover td{background:var(--card-2)}
+@media (max-width:700px){.head .acts select{max-width:100px}}
+.tag.t-review{background:var(--amber-bg,var(--acc-bg));color:var(--amber-ink,var(--acc-ink))}
