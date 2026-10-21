@@ -7,7 +7,7 @@ import { contextFor } from './_lib/session.js';
 import { hasSection } from './_lib/team.js';
 import { OPS } from './_lib/ops.js';
 import { stripe, stripeKey } from './_lib/stripe.js';
-import { TAX_OPS, OWNER_KINDS, taxMap } from './_lib/tax.js';
+import { TAX_OPS, OWNER_KINDS, taxMap, lineOf } from './_lib/tax.js';
 import { qbJournal, toIIF, toQBOcsv, accountsCsv } from './_lib/qb.js';
 import { feedOk } from './_lib/links.js';
 import { getSettings } from './_lib/settings.js';
@@ -43,7 +43,7 @@ async function feed(sp, res) {
       from entries e left join clients c on c.id=e.client_id left join workers w on w.id=e.worker_id left join bills b on b.id=e.bill_id
       where e.date between $1 and $2 and e.part = any($3::text[]) order by e.date, e.id`, [from, to, parts]);
     rows = [['Date', 'Type', 'Category', 'Tax line', 'Paid to / from', 'Method', 'Receipt / invoice #', 'Note', 'Amount', 'Receipt on file', ...(s.f_cellular ? ['Part'] : [])],
-      ...ent.map((e) => [e.date, e.kind === 'income' ? 'Income' : 'Expense', e.category, e.kind === 'income' ? 'Income' : map[e.category] || 'Other expenses',
+      ...ent.map((e) => [e.date, e.kind === 'income' ? 'Income' : 'Expense', e.category, lineOf(map, e),
         e.worker_name || e.party || e.bill_vendor || e.client_name || '', e.method || '', e.ref || e.invoice_number || '', e.note || '',
         c2d(e.kind === 'income' ? e.amount_cents : -e.amount_cents), e.files ? 'Yes' : '', ...(s.f_cellular ? [PART_NAMES[e.part] || e.part] : [])])];
   }
@@ -165,9 +165,10 @@ export default async function handler(req, res) {
       rep.rows.map((/** @type {any} */ r) => [r.date, r.type, r.category, r.party, r.description, r.method, c2d(r.amount), c2d(r.fee), c2d(r.net)]));
 
     // 3. Books: income and expenses entered or imported
-    const ent = (/** @type {string} */ kind) => entries.filter((e) => e.kind === kind).map((e) => [e.date, e.category, e.worker_name || e.party || e.bill_vendor || '', e.client_name || '', e.project_name || '',
+    const cmap = await taxMap();
+    const ent = (/** @type {string} */ kind) => entries.filter((e) => e.kind === kind).map((e) => [e.date, e.category, lineOf(cmap, e), e.worker_name || e.party || e.bill_vendor || '', e.client_name || '', e.project_name || '',
       e.method || '', e.bill_vendor ? `Bill${e.bill_number ? ' #' + e.bill_number : ''}` : e.worker_id ? 'Team pay' : e.import_file_id ? 'Bank import' : '', e.ref || '', e.note || '', c2d(e.amount_cents), e.files ? 'Yes' : '']);
-    const entCols = /** @type {[string, number, string?][]} */ ([['Date', 12], ['Category', 24], ['Paid to / from', 28], ['Client', 22], ['Project', 22], ['Method', 14], ['Source', 14], ['Receipt / invoice #', 16], ['Note', 40], ['Amount', 14, USD], ['Receipt on file', 10]]);
+    const entCols = /** @type {[string, number, string?][]} */ ([['Date', 12], ['Category', 24], ['Counts as', 26], ['Paid to / from', 28], ['Client', 22], ['Project', 22], ['Method', 14], ['Source', 14], ['Receipt / invoice #', 16], ['Note', 40], ['Amount', 14, USD], ['Receipt on file', 10]]);
     sheet(wb, 'Income (Books)', entCols, ent('income'));
     sheet(wb, 'Expenses (Books)', entCols, ent('expense'));
 
@@ -215,6 +216,9 @@ export default async function handler(req, res) {
       tsec('EXPENSES BY TAX LINE');
       for (const l of t.expenses.byLine) if (l.line !== 'Cost of goods sold') ts.addRow([l.line, c2d(l.cents), l.categories.map((/** @type {any} */ x) => x.category).join(', ')]);
       ts.addRow([]);
+      tsec('NOT IN PROFIT (money out / money in)');
+      for (const l of t.balance) { ts.addRow([l.line + ' — out', c2d(l.out), l.categories.map((/** @type {any} */ x) => x.category).join(', ')]); if (l.in) ts.addRow([l.line + ' — in', c2d(l.in)]); }
+      ts.addRow([]);
       tsec('OWNER MONEY (not in profit)');
       for (const [k, label] of Object.entries(OWNER_KINDS)) ts.addRow([label, c2d(t.owner.totals[k])]);
       ts.addRow([]);
@@ -224,6 +228,8 @@ export default async function handler(req, res) {
         t.owner.list.map((/** @type {any} */ o) => ([o.date, OWNER_KINDS[o.kind], o.person || '', o.method || '', o.note || '', c2d(o.amount_cents)])));
       sheet(wb, '1099 check', [['Paid to', 28], ['Type', 14], ['Paid (not by card)', 16, USD], ['Paid by card', 14, USD], ['Payments', 10], ['1099-NEC needed', 14], ['W-9 on file', 12], ['Note', 36]],
         t.vendors.map((/** @type {any} */ v) => [v.name, v.type, c2d(v.paid), c2d(v.card), v.payments, v.needs_1099 ? 'Yes' : '', v.w9 ? 'Yes' : v.needs_1099 ? 'MISSING' : '', v.note]));
+      sheet(wb, 'Accountant to decide', [['Date', 12], ['In / out', 10], ['Paid to / from', 28], ['Category', 24], ['Method', 14], ['Note', 40], ['Amount', 14, USD]],
+        t.missing.review.map((/** @type {any} */ e) => [e.date, e.kind === 'income' ? 'In' : 'Out', e.party || '', e.category, e.method || '', e.note || '', c2d(e.amount_cents)]));
       sheet(wb, 'Missing receipts', ([['Date', 12], ['Paid to', 28], ['Category', 24], ['Method', 14], ['Note', 40], ['Amount', 14, USD]]),
         t.missing.receipts.map((/** @type {any} */ e) => ([e.date, e.party || '', e.category, e.method || '', e.note || '', c2d(e.amount_cents)])));
     }

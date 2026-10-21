@@ -430,3 +430,4 @@ table.t td.wrap{white-space:normal;font-size:13px}
 table.t tr.click{cursor:pointer}
 table.t tr.click:hover td{background:var(--card-2)}
 @media (max-width:700px){.head .acts select{max-width:100px}}
+.tag.t-review{background:var(--amber-bg,var(--acc-bg));color:var(--amber-ink,var(--acc-ink))}

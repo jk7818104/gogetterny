@@ -84,6 +84,23 @@ await test('taxes: owner money stays out of profit, tax lines, inventory, 1099 c
   assert.ok(t.checks.find((c) => c.key === 'w9').ok && t.checks.find((c) => c.key === 'inventory').ok);
   assert.equal((await op('tax.summary', { year: y + 1 })).cogs.begin, 100000, "Dec 31 becomes next year's Jan 1");
   assert.ok(t.expenses.byLine.find((l) => l.line === 'Not deductible'));
+  // the accountant decides: one entry as equipment, a whole category for later
+  const eq = await op('entries.save', { kind: 'expense', date: d('07-01'), amount_cents: 150000, category: 'Hardware & inventory', party: 'Dell', method: 'Card', tax_line: 'Equipment (fixed asset)' });
+  const loan = await op('entries.save', { kind: 'income', date: d('07-02'), amount_cents: 250000, category: 'Other income', party: 'Bank loan', method: 'Bank transfer' });
+  await fails('entries.save', { kind: 'income', date: d('07-02'), amount_cents: 1, category: 'Other income', party: 'x', tax_line: 'Advertising' });
+  let t2 = await op('tax.summary', { year: y });
+  assert.equal(t2.cogs.purchases, 300000, 'equipment is not cost of goods');
+  assert.equal(t2.balance.find((l) => l.line === 'Equipment (fixed asset)').out, 150000);
+  await op('entries.bulk', { ids: [loan.id], tax_line: 'Loan received (liability)' });
+  await op('tax.map.save', { map: { 'Travel': 'Accountant to decide' } });
+  await op('entries.save', { kind: 'expense', date: d('07-03'), amount_cents: 9900, category: 'Travel', party: 'Airline', method: 'Card' });
+  t2 = await op('tax.summary', { year: y });
+  assert.equal(t2.income, 500000, 'a loan is not income');
+  assert.equal(t2.balance.find((l) => l.line === 'Loan received (liability)').in, 250000);
+  assert.equal(t2.checks.find((c) => c.key === 'review').count, 1);
+  assert.equal(t2.missing.review[0].party, 'Airline');
+  await fails('tax.map.save', { map: { 'in:Other income': 'Advertising' } });
+  await op('tax.map.save', { map: { 'Travel': 'Travel' } });
   const light = await op('tax.summary', { year: y, light: true });
   assert.ok(light.ready && !light.vendors);
   await fails('tax.owner.save', { kind: 'gift', date: d('01-01'), amount_cents: 1 });
@@ -106,7 +123,7 @@ await test('QuickBooks files: balanced IIF for Desktop and journal CSV for Onlin
   assert.equal(iif.statusCode, 200, String(iif.body));
   const text = String(iif.body);
   assert.ok(text.startsWith('!ACCNT'));
-  assert.ok(text.includes('Owner contributions\tEQUITY') && text.includes('Cost of goods sold\tCOGS'));
+  assert.ok(text.includes('Owner contributions\tEQUITY') && text.includes('Cost of goods sold\tCOGS') && text.includes('Equipment\tFIXASSET') && text.includes('Loans payable\tLTLIAB'));
   // every transaction adds up to zero
   let sum = 0, n = 0;
   for (const line of text.split('\r\n')) {
@@ -161,7 +178,6 @@ await test('linked sheets and the live feed link', async () => {
   await op('feed.off');
   assert.equal((await hit(exportApi, request('GET', `/api/export?feed=${token}&what=books`))).statusCode, 404);
 });
-
 
 console.log(passed + ' passed' + (process.exitCode ? ', some FAILED' : ''));
 process.exit();

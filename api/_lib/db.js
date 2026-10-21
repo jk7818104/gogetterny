@@ -227,6 +227,8 @@ create index if not exists files_project on files(project_id);
 alter table entries add column if not exists import_file_id int;
 -- tax-ready books (f_tax): receipt or invoice number on an entry, owner money kept out of profit, 1099 vendors, year-end inventory
 alter table entries add column if not exists ref text;
+-- how one entry counts for taxes, when it is not what its category says (see tax.js LINE_GROUPS)
+alter table entries add column if not exists tax_line text;
 -- the shared tax code filters by part; GO GETTER has one part
 alter table entries add column if not exists part text not null default 'devices';
 alter table bills add column if not exists part text not null default 'devices';

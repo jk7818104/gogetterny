@@ -8,11 +8,31 @@ import { getKV, setKV } from './settings.js';
 import { PART_NAMES, partsFor, partsAsked, pickPart, mustPart } from './parts.js';
 import { trashDelete } from './trash.js';
 
-/** The lines an accountant works with. Each expense category goes to one of them (changeable on the Taxes page). */
-export const TAX_LINES = [
-  'Cost of goods sold', 'Contract labor', 'Advertising', 'Office expense', 'Supplies', 'Utilities (phone and internet)', 'Travel',
-  'Taxes and licenses', 'Legal and professional services', 'Software and subscriptions', 'Bank and card fees', 'Other expenses', 'Not deductible'
-];
+/**
+ * How a transaction counts. Each category gets one (changeable on the Taxes page), and one entry can be set on its own.
+ * Simple entries go in as money in / money out; the accountant decides here what each one is.
+ * group: expense and cogs are in profit; asset, equity and liability are not (balance sheet); review = the accountant decides.
+ */
+export const LINE_GROUPS = /** @type {Record<string, string>} */ ({
+  // money out
+  'Cost of goods sold': 'cogs', 'Contract labor': 'expense', 'Advertising': 'expense', 'Office expense': 'expense', 'Supplies': 'expense',
+  'Utilities (phone and internet)': 'expense', 'Travel': 'expense', 'Taxes and licenses': 'expense', 'Legal and professional services': 'expense',
+  'Software and subscriptions': 'expense', 'Bank and card fees': 'expense', 'Other expenses': 'expense', 'Not deductible': 'nondeduct',
+  'Equipment (fixed asset)': 'asset', 'Inventory on hand (asset)': 'asset', 'Deposit or prepaid (asset)': 'asset',
+  'Owner draw (equity)': 'equity', 'Loan paid back (liability)': 'liability',
+  // money in
+  'Sales and income': 'income', 'Owner capital (equity)': 'equity', 'Loan received (liability)': 'liability', 'Not income (transfer or refund)': 'none',
+  // either way
+  'Accountant to decide': 'review'
+});
+export const TAX_LINES = Object.keys(LINE_GROUPS);
+const OUT_GROUPS = ['cogs', 'expense', 'nondeduct', 'asset', 'equity', 'liability', 'review'];
+const IN_GROUPS = ['income', 'equity', 'liability', 'none', 'review'];
+/** Lines that fit money out, and money in. */
+export const LINES_FOR = {
+  expense: TAX_LINES.filter((l) => OUT_GROUPS.includes(LINE_GROUPS[l]) && !['Owner capital (equity)', 'Loan received (liability)'].includes(l)),
+  income: TAX_LINES.filter((l) => IN_GROUPS.includes(LINE_GROUPS[l]) && !['Owner draw (equity)', 'Loan paid back (liability)'].includes(l))
+};
 export const DEFAULT_MAP = /** @type {Record<string, string>} */ ({
   'Hardware & inventory': 'Cost of goods sold',
   'Shipping & freight': 'Cost of goods sold',
@@ -25,7 +45,9 @@ export const DEFAULT_MAP = /** @type {Record<string, string>} */ ({
   'Bank & card fees': 'Bank and card fees',
   'Taxes & licenses': 'Taxes and licenses',
   'Professional fees': 'Legal and professional services',
-  'Other': 'Other expenses'
+  'Other': 'Other expenses',
+  // money in: the key starts with "in:"
+  'in:Projects': 'Sales and income', 'in:Consulting': 'Sales and income', 'in:Hardware sales': 'Sales and income', 'in:Invoices': 'Sales and income', 'in:Other income': 'Sales and income'
 });
 export const OWNER_KINDS = /** @type {Record<string, string>} */ ({
   contribution: 'Owner put money in', draw: 'Owner took money out', loan_in: 'Loan received', loan_repay: 'Loan paid back'
@@ -43,8 +65,13 @@ export async function taxMap() {
   for (const [k, v] of Object.entries(saved)) if (TAX_LINES.includes(String(v))) m[k] = String(v);
   return m;
 }
-/** @param {Record<string,string>} map @param {string} cat */
-const lineOf = (map, cat) => map[cat] || 'Other expenses';
+/** How one entry counts: its own setting, or its category's. @param {Record<string,string>} map @param {{kind: string, category: string, tax_line?: string|null}} e */
+export function lineOf(map, e) {
+  const fits = LINES_FOR[e.kind === 'income' ? 'income' : 'expense'];
+  if (e.tax_line && fits.includes(e.tax_line)) return e.tax_line;
+  const m = e.kind === 'income' ? map['in:' + e.category] : map[e.category];
+  return m && fits.includes(m) ? m : e.kind === 'income' ? 'Sales and income' : 'Other expenses';
+}
 
 /** @param {any} v */
 function year(v) {
@@ -88,9 +115,8 @@ async function taxSummary(b, req, ctx) {
   const mine = partsFor(ctx);
   const parts = partsAsked(b.part, ctx);
   const map = await taxMap();
-  const [inc, exp, owner, inv, pay, missing, other, nomethod, bills] = await Promise.all([
-    one(`select coalesce(sum(amount_cents),0)::bigint as n from entries where kind='income' and date between $1 and $2 and part = any($3::text[])`, [from, to, parts]),
-    q(`select category, sum(amount_cents)::bigint as cents, count(*)::int as n from entries where kind='expense' and date between $1 and $2 and part = any($3::text[]) group by category`, [from, to, parts]),
+  const [all, owner, inv, pay, missing, other, nomethod, bills, review] = await Promise.all([
+    q(`select kind, category, tax_line, sum(amount_cents)::bigint as cents, count(*)::int as n from entries where date between $1 and $2 and part = any($3::text[]) group by kind, category, tax_line`, [from, to, parts]),
     q(`select * from owner_money where date between $1 and $2 and part = any($3::text[]) order by date, id`, [from, to, parts]),
     q(`select * from tax_years where year=$1 and part = any($2::text[])`, [y, parts]),
     payees(from, to, parts),
@@ -103,20 +129,34 @@ async function taxSummary(b, req, ctx) {
     q(`select e.id, e.date, e.amount_cents, e.category, e.party, e.method, e.note, e.ref, e.part, e.kind, e.client_id, e.project_id from entries e
        where e.date between $1 and $2 and e.part = any($3::text[]) and coalesce(trim(e.method),'') = '' order by e.date limit 300`, [from, to, parts]),
     one(`select coalesce(sum(greatest(b.amount_cents - coalesce((select sum(e.amount_cents) from entries e where e.bill_id=b.id and e.kind='expense' and e.date <= $1),0),0)),0)::bigint as n
-       from bills b where b.bill_date <= $1 and b.part = any($2::text[])`, [to, parts])
+       from bills b where b.bill_date <= $1 and b.part = any($2::text[])`, [to, parts]),
+    q(`select e.id, e.date, e.amount_cents, e.category, e.party, e.method, e.note, e.ref, e.part, e.kind, e.tax_line, e.client_id, e.project_id from entries e
+       where e.date between $1 and $2 and e.part = any($3::text[])
+         and (e.tax_line = 'Accountant to decide' or (e.tax_line is null and ((e.kind='expense' and e.category = any($4::text[])) or (e.kind='income' and e.category = any($5::text[])))))
+       order by e.date, e.id limit 1000`, [from, to, parts,
+      Object.keys(map).filter((k) => !k.startsWith('in:') && map[k] === 'Accountant to decide'),
+      Object.keys(map).filter((k) => k.startsWith('in:') && map[k] === 'Accountant to decide').map((k) => k.slice(3))])
   ]);
+  // entries waiting for the accountant: set one by one, or their whole category
+  const toDecide = review.filter((e) => lineOf(map, e) === 'Accountant to decide').slice(0, 300);
 
-  /** @type {Record<string, {line: string, cents: number, categories: {category: string, cents: number}[]}>} */
+  /** @type {Record<string, {line: string, group: string, cents: number, out: number, in: number, categories: {category: string, cents: number}[]}>} */
   const lines = {};
-  let expTotal = 0, purchases = 0;
-  for (const r of exp) {
-    const line = lineOf(map, r.category);
-    const l = (lines[line] ||= { line, cents: 0, categories: [] });
-    l.cents += r.cents; l.categories.push({ category: r.category, cents: r.cents });
-    expTotal += r.cents;
-    if (line === 'Cost of goods sold') purchases += r.cents;
+  let expTotal = 0, purchases = 0, incTotal = 0;
+  for (const r of all) {
+    const line = lineOf(map, r);
+    const l = (lines[line] ||= { line, group: LINE_GROUPS[line], cents: 0, out: 0, in: 0, categories: [] });
+    l.cents += r.cents; l[r.kind === 'income' ? 'in' : 'out'] += r.cents;
+    const label = (r.kind === 'income' ? 'In: ' : '') + r.category + (r.tax_line ? ' (set one by one)' : '');
+    const c = l.categories.find((x) => x.category === label);
+    if (c) c.cents += r.cents; else l.categories.push({ category: label, cents: r.cents });
+    if (r.kind === 'income' && l.group === 'income') incTotal += r.cents;
+    if (r.kind === 'expense' && ['cogs', 'expense', 'nondeduct'].includes(l.group)) expTotal += r.cents;
+    if (r.kind === 'expense' && line === 'Cost of goods sold') purchases += r.cents;
   }
-  const byLine = TAX_LINES.map((l) => lines[l]).filter(Boolean);
+  // in profit: costs and expenses. Not in profit: assets, owner capital and draws, loans, transfers, and what the accountant still has to decide
+  const byLine = TAX_LINES.map((l) => lines[l]).filter((l) => l && ['cogs', 'expense', 'nondeduct'].includes(l.group));
+  const balance = TAX_LINES.map((l) => lines[l]).filter((l) => l && ['asset', 'equity', 'liability', 'none', 'review'].includes(l.group));
 
   // inventory: what was on hand on Jan 1 and Dec 31. Without it, everything bought counts as sold.
   const invBegin = inv.reduce((x, r) => x + (r.inv_begin_cents || 0), 0);
@@ -142,6 +182,8 @@ async function taxSummary(b, req, ctx) {
       hint: 'Get a W-9 from everyone paid $600 or more (not by card), before January 31.' },
     { key: 'inventory', title: 'Inventory on Dec 31', ok: !purchases || invEntered, count: !purchases || invEntered ? 0 : 1, cents: 0,
       hint: 'Count what is still in stock on December 31 and enter its cost. Needed to work out the cost of goods sold.' },
+    { key: 'review', title: 'Waiting for the accountant to decide', ok: !toDecide.length, count: toDecide.length, cents: sumOf(toDecide),
+      hint: 'Expense, equipment, owner money or a loan? Set it on the entry, or for its whole category.' },
     { key: 'unknown', title: 'Vendors with unknown type', ok: !need1099.some((p) => p.type === 'unknown'), count: need1099.filter((p) => p.type === 'unknown').length, cents: 0,
       hint: 'Individual, LLC or corporation, from their W-9.' }
   ];
@@ -150,16 +192,17 @@ async function taxSummary(b, req, ctx) {
     year: y, from, to, part: parts.length === 1 && mine.length > 1 ? parts[0] : 'all', parts: mine,
     ready: { done, total: checks.length, pct: Math.round((done / checks.length) * 100) },
     checks,
-    income: inc ? inc.n : 0,
+    income: incTotal,
     expenses: { total: expTotal, deductible, byLine },
+    balance,
     cogs: { begin: invBegin, purchases, end: invEnd, total: cogs, entered: invEntered, years: inv },
     owner: { totals: ownerTotals, list: owner },
     vendors: pay,
     bills_unpaid: bills ? bills.n : 0,
-    map, lines: TAX_LINES, owner_kinds: OWNER_KINDS
+    map, lines: TAX_LINES, groups: LINE_GROUPS, lines_for: LINES_FOR, owner_kinds: OWNER_KINDS
   };
   if (b.light) return { year: y, ready: out.ready, checks: out.checks.map(({ key, title, ok, count, cents: c }) => ({ key, title, ok, count, cents: c })) };
-  return { ...out, missing: { receipts: missing, other, method: nomethod } };
+  return { ...out, missing: { receipts: missing, other, method: nomethod, review: toDecide } };
 }
 
 async function ownerSave(/** @type {any} */ b, /** @type {any} */ req, /** @type {any} */ ctx) {
@@ -214,8 +257,9 @@ async function mapSave(/** @type {any} */ b) {
   /** @type {Record<string, string>} */
   const out = {};
   for (const [k, v] of Object.entries(m)) {
-    if (!TAX_LINES.includes(String(v))) throw new HttpError(400, `"${String(v).slice(0, 40)}" is not a tax line`);
-    out[str(k, 60)] = String(v);
+    const key = str(k, 64);
+    if (!LINES_FOR[key.startsWith('in:') ? 'income' : 'expense'].includes(String(v))) throw new HttpError(400, `"${String(v).slice(0, 40)}" does not fit "${key.replace(/^in:/, '')}"`);
+    out[key] = String(v);
   }
   await setKV('sys:taxmap', { ...((await getKV('sys:taxmap')) || {}), ...out });
   return { map: await taxMap() };

@@ -4,7 +4,7 @@
 //   CSV  - QuickBooks Online: Settings → Import data → Journal entries
 // Expenses go to the tax-line accounts set on the Taxes page; Devices / Cellular become QuickBooks classes.
 import { q } from './db.js';
-import { taxMap, OWNER_KINDS } from './tax.js';
+import { taxMap, OWNER_KINDS, lineOf, LINE_GROUPS } from './tax.js';
 import { PART_NAMES } from './parts.js';
 
 const BANK = 'Checking', CARD = 'Credit card', STRIPE = 'Stripe', CASH = 'Cash on hand';
@@ -17,6 +17,23 @@ function moneyAccount(method) {
   if (m === 'cash') return CASH;
   if (m === 'stripe') return STRIPE;
   return BANK;
+}
+
+/**
+ * The QuickBooks account for a line. "Accountant to decide" goes to QuickBooks' usual "Ask My Accountant".
+ * @param {string} line @param {any} e @param {(name: string, type: string) => string} acct
+ */
+function accountFor(line, e, acct) {
+  const g = LINE_GROUPS[line];
+  if (g === 'income') return acct(e.category === 'Invoices' ? 'Sales' : 'Sales - ' + e.category, 'INC');
+  if (g === 'cogs') return acct(line, 'COGS');
+  if (g === 'asset') return acct(line.replace(/ \(.*\)$/, ''), line.startsWith('Equipment') ? 'FIXASSET' : 'OCASSET');
+  if (line === 'Owner draw (equity)') return acct(EQ_OUT, 'EQUITY');
+  if (line === 'Owner capital (equity)') return acct(EQ_IN, 'EQUITY');
+  if (g === 'liability') return acct(LOANS, 'LTLIAB');
+  if (g === 'none') return acct('Transfers and refunds', 'OCASSET');
+  if (g === 'review') return acct('Ask My Accountant', 'EXP');
+  return acct(line, 'EXP');
 }
 
 /**
@@ -44,14 +61,10 @@ export async function qbJournal({ from, to, parts, withClass, stripeRows = [] })
     const name = e.worker_name || e.party || e.bill_vendor || e.client_name || '';
     const ref = e.ref || e.bill_number || e.invoice_number || '';
     const memo = [e.category, e.note].filter(Boolean).join(' - ');
-    if (e.kind === 'income') {
-      const inc = acct(e.category === 'Invoices' ? 'Sales' : 'Sales - ' + e.category, 'INC');
-      tx.push({ no: 'BK' + e.id, date: e.date, kind: 'DEPOSIT', name, memo, ref, cls: cls(e.part), lines: [{ account: money, amount: e.amount_cents }, { account: inc, amount: -e.amount_cents }] });
-    } else {
-      const line = map[e.category] || 'Other expenses';
-      const exp = acct(line, line === 'Cost of goods sold' ? 'COGS' : 'EXP');
-      tx.push({ no: 'BK' + e.id, date: e.date, kind: money === CARD ? 'CREDIT CARD' : 'CHECK', name, memo, ref, cls: cls(e.part), lines: [{ account: exp, amount: e.amount_cents }, { account: money, amount: -e.amount_cents }] });
-    }
+    // the account follows how the entry counts (its own setting or its category's)
+    const other = accountFor(lineOf(map, e), e, acct);
+    if (e.kind === 'income') tx.push({ no: 'BK' + e.id, date: e.date, kind: 'DEPOSIT', name, memo, ref, cls: cls(e.part), lines: [{ account: money, amount: e.amount_cents }, { account: other, amount: -e.amount_cents }] });
+    else tx.push({ no: 'BK' + e.id, date: e.date, kind: money === CARD ? 'CREDIT CARD' : 'CHECK', name, memo, ref, cls: cls(e.part), lines: [{ account: other, amount: e.amount_cents }, { account: money, amount: -e.amount_cents }] });
   }
   for (const o of owner) {
     const money = acct(moneyAccount(o.method), bankType(moneyAccount(o.method)));
@@ -111,6 +124,6 @@ export function toQBOcsv(j) {
 
 /** The accounts to make in QuickBooks Online first (it does not create them from the import). @param {Awaited<ReturnType<typeof qbJournal>>} j */
 export function accountsCsv(j) {
-  const T = /** @type {Record<string,string>} */ ({ BANK: 'Bank', CCARD: 'Credit Card', INC: 'Income', EXP: 'Expenses', COGS: 'Cost of Goods Sold', EQUITY: 'Equity', LTLIAB: 'Long Term Liabilities' });
+  const T = /** @type {Record<string,string>} */ ({ BANK: 'Bank', CCARD: 'Credit Card', INC: 'Income', EXP: 'Expenses', COGS: 'Cost of Goods Sold', EQUITY: 'Equity', LTLIAB: 'Long Term Liabilities', FIXASSET: 'Fixed Assets', OCASSET: 'Other Current Assets' });
   return ['Account Name,Type', ...[...j.accounts].map(([n, t]) => [n, T[t] || t].map(c).join(','))].join('\r\n') + '\r\n';
 }
