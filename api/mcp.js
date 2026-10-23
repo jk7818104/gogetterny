@@ -132,7 +132,7 @@ const TOOLS = [
   { name: 'add_income', description: `Record money that came in outside Stripe (cash, check, Zelle, wire). Category one of: ${CATS_IN.join(', ')}.`,
     inputSchema: S({ amount: num, date, received_from: str, category: { type: 'string', enum: CATS_IN }, method: { type: 'string', enum: ['Cash', 'Check', 'Zelle', 'Bank transfer', 'Card', 'Other'] }, note: str, client: str, project: str }, ['amount', 'received_from']),
     run: async (a, ctx) => entry('income', { ...a, paid_to: a.received_from }, ctx) },
-  { name: 'tax_summary', read: true, description: 'Taxes for one year: how ready the books are for the accountant (missing receipts, W-9s, inventory count), expenses by tax line, cost of goods sold, owner money and loans, and who was paid $600 or more (1099 check).',
+  { name: 'tax_summary', read: true, description: 'Taxes for one year: how ready the books are for the accountant (missing receipts, W-9s, inventory count), expenses by tax line, cost of goods sold, owner money and loans, and who was paid enough to need a 1099 ($600 through 2025, $2,000 from 2026).',
     inputSchema: S({ year: num }, ['year']), run: async (a, ctx) => {
       if (ctx.settings && ctx.settings.f_tax === false) throw new HttpError(400, 'Taxes are switched off in Settings');
       const t = await call('tax.summary', { year: a.year }, ctx);
@@ -140,7 +140,7 @@ const TOOLS = [
         income: usd(t.income), cost_of_goods_sold: { inventory_jan_1: usd(t.cogs.begin), purchases: usd(t.cogs.purchases), inventory_dec_31: t.cogs.entered ? usd(t.cogs.end) : 'not counted yet', total: usd(t.cogs.total) },
         expenses_by_tax_line: t.expenses.byLine.map((/** @type {any} */ l) => ({ line: l.line, amount: usd(l.cents) })),
         owner_money: Object.fromEntries(Object.entries(t.owner.totals).map(([k, v]) => [k, usd(v)])),
-        paid_600_or_more: t.vendors.filter((/** @type {any} */ v) => v.needs_1099).map((/** @type {any} */ v) => ({ name: v.name, paid: usd(v.paid), type: v.type, w9_on_file: v.w9 })) };
+        needs_1099_threshold: usd(t.limit_1099), needs_1099: t.vendors.filter((/** @type {any} */ v) => v.needs_1099).map((/** @type {any} */ v) => ({ name: v.name, paid: usd(v.paid), type: v.type, w9_on_file: v.w9 })) };
     } },
   { name: 'add_owner_money', description: 'Record money the owner put into the business or took out, or a loan received or paid back. It is kept out of profit (not income, not an expense).',
     inputSchema: S({ kind: { type: 'string', enum: ['contribution', 'draw', 'loan_in', 'loan_repay'] }, amount: num, date, person: str, method: { type: 'string', enum: ['Cash', 'Check', 'Zelle', 'Bank transfer', 'Card', 'Other'] }, note: str }, ['kind', 'amount']),

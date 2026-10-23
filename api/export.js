@@ -7,7 +7,7 @@ import { contextFor } from './_lib/session.js';
 import { hasSection } from './_lib/team.js';
 import { OPS } from './_lib/ops.js';
 import { stripe, stripeKey } from './_lib/stripe.js';
-import { TAX_OPS, OWNER_KINDS, taxMap, lineOf } from './_lib/tax.js';
+import { TAX_OPS, OWNER_KINDS, taxMap, lineOf, limit1099, limit1099Label } from './_lib/tax.js';
 import { qbJournal, toIIF, toQBOcsv, accountsCsv } from './_lib/qb.js';
 import { feedOk } from './_lib/links.js';
 import { getSettings } from './_lib/settings.js';
@@ -178,8 +178,8 @@ export default async function handler(req, res) {
         .map((b) => [b.vendor, b.number || '', b.bill_date, b.due_date || '', b.category, b.project_name || '', c2d(b.amount_cents), c2d(b.paid_in_year), c2d(Math.max(0, b.amount_cents - b.paid_by_end))]));
 
     // 5. Team pay, with the 1099 check
-    sheet(wb, 'Team pay', [['Name', 24], ['Role', 18], ['Email', 28], ['Phone', 16], ['Hours logged', 12, '0.00'], ['Payments', 10], ['Paid in ' + year, 16, USD], ['$600 or more (1099 check)', 20]],
-      team.filter((w) => w.paid > 0 || w.minutes > 0).map((w) => [w.name, w.title || '', w.email || '', w.phone || '', Math.round((w.minutes / 60) * 100) / 100, w.payments, c2d(w.paid), w.paid >= 60000 ? 'Yes' : '']));
+    sheet(wb, 'Team pay', [['Name', 24], ['Role', 18], ['Email', 28], ['Phone', 16], ['Hours logged', 12, '0.00'], ['Payments', 10], ['Paid in ' + year, 16, USD], [limit1099Label(year) + ' or more (1099 check)', 20]],
+      team.filter((w) => w.paid > 0 || w.minutes > 0).map((w) => [w.name, w.title || '', w.email || '', w.phone || '', Math.round((w.minutes / 60) * 100) / 100, w.payments, c2d(w.paid), w.paid >= limit1099(year) ? 'Yes' : '']));
 
     // 6. Invoices from Stripe
     if (stripeKey()) {
@@ -244,7 +244,7 @@ export default async function handler(req, res) {
       'Invoices marked paid by cash, check or Zelle are in "Income (Books)" with category Invoices.',
       'Bank statement rows that were imported say "Bank import" in the Source column.',
       'Supplier bills count as expenses on the day they were paid. "Bills" shows what was still unpaid on December 31.',
-      'Team pay: "$600 or more" marks people who may need a 1099-NEC. Check this with your accountant (people paid by card or through a payment app may be reported by the payment company instead).',
+      'Team pay: "' + limit1099Label(year) + ' or more" marks people who may need a 1099-NEC. Check this with your accountant (people paid by card or through a payment app may be reported by the payment company instead).',
       'Receipts and bills that have a file attached can be opened from the admin.',
       ...(taxOn ? ['"Tax summary" groups expenses by tax line, works out the cost of goods sold from the inventory counts, and lists what is still missing.',
         '"Owner money" is money the owner put in or took out, and loans. It is not income or an expense.',

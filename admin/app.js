@@ -2538,7 +2538,7 @@
           <div class="main"><b>${OWNER_LABEL[o.kind]}${partTag(o.part)}</b><span>${[fmtDate(o.date), o.person, o.method, o.note].filter(Boolean).join(' · ')}</span></div>
           ${pill(o.kind === 'contribution' || o.kind === 'loan_in' ? 'paid' : 'open', o.kind === 'contribution' || o.kind === 'loan_in' ? 'in' : 'out')}
           <div class="amt">${money(o.amount_cents)}</div></div>`) : empty('Money the owner puts in or takes out, and loans, go here, not in Books. They are not income or expenses.')}</div>
-      <h2 class="sec">People and companies paid (1099 check) <span class="muted">$600 or more, not by card</span></h2>
+      <h2 class="sec">People and companies paid (1099 check) <span class="muted">${money(d.limit_1099).replace(".00", "")} or more, not by card</span></h2>
       <div class="panel tablewrap"><table class="t"><thead><tr><th>Paid to</th><th>Type</th><th class="n">Paid</th><th class="n">By card</th><th>1099</th><th>W-9</th></tr></thead><tbody>
         ${d.vendors.length ? d.vendors.map((v) => html`<tr class="${editTax ? 'click' : ''}" ${raw(editTax ? `data-tx="vendor" data-name="${esc(v.name)}"` : '')}><td><b>${v.name}</b>${v.worker ? html`<span class="tag">team</span>` : ''}</td>
           <td>${(VTYPES.find((x) => x[0] === v.type) || VTYPES[0])[1]}</td><td class="n">${money(v.paid)}</td><td class="n muted">${v.card ? money(v.card) : ''}</td>
@@ -2583,7 +2583,7 @@
       <p class="soft"><b>${v.name}</b> · paid ${money(v.paid || 0)} in ${state.tax.year}${v.card ? ` (plus ${money(v.card)} by card)` : ''}</p>
       <div><label for="v-type">Type (from their W-9)</label><select id="v-type">${VTYPES.map(([k, l]) => html`<option value="${k}" ${raw(v.type === k ? 'selected' : '')}>${l}</option>`)}</select></div>
       <label class="ck"><input type="checkbox" id="v-w9" ${raw(v.w9 ? 'checked' : '')}><span>W-9 on file</span></label>
-      <div><label for="v-1099">Needs a 1099-NEC</label><select id="v-1099"><option value="">Decide by itself ($600 or more, not a corporation, not abroad)</option>
+      <div><label for="v-1099">Needs a 1099-NEC</label><select id="v-1099"><option value="">Decide by itself (${money(state.tax.limit_1099).replace(".00", "")} or more, not a corporation, not abroad)</option>
         <option value="yes" ${raw(v.decided && v.needs_1099 ? 'selected' : '')}>Yes</option><option value="no" ${raw(v.decided && !v.needs_1099 ? 'selected' : '')}>No</option></select></div>
       <div><label for="v-note">Note</label><input id="v-note" maxlength="500" value="${v.note || ''}" placeholder="e.g. W-9 in the email of Jan 5"></div>
       <p class="hint">Keep the W-9 itself as a file (attach it to one of their payments). The tax ID is not stored here.</p>

@@ -55,7 +55,9 @@ export const OWNER_KINDS = /** @type {Record<string, string>} */ ({
 const VENDOR_TYPES = ['unknown', 'individual', 'llc', 'partnership', 'corporation', 'foreign'];
 // paid by card or through a payment app: the payment company reports it (1099-K), not us
 const NOT_1099_METHODS = ['card'];
-const LIMIT_1099 = 60000;
+// 1099-NEC/MISC threshold: $600 through 2025; $2,000 for payments made from Jan 1, 2026 (indexed for inflation after 2026)
+export const limit1099 = (/** @type {number} */ y) => (y >= 2026 ? 200000 : 60000);
+export const limit1099Label = (/** @type {number} */ y) => '$' + (limit1099(y) / 100).toLocaleString('en-US');
 
 /** @returns {Promise<Record<string, string>>} */
 export async function taxMap() {
@@ -103,7 +105,7 @@ async function payees(from, to, parts) {
     const v = vb.get(norm(x.name));
     const type = v ? v.type : 'unknown';
     // corporations and suppliers abroad (they give a W-8, not a W-9) usually don't get a 1099; the owner can say yes or no per vendor
-    const needs = v && v.needs_1099 !== null ? v.needs_1099 : x.paid >= LIMIT_1099 && type !== 'corporation' && type !== 'foreign';
+    const needs = v && v.needs_1099 !== null ? v.needs_1099 : x.paid >= limit1099(Number(from.slice(0, 4))) && type !== 'corporation' && type !== 'foreign';
     return { ...x, vendor_id: v ? v.id : null, type, w9: v ? v.w9 : false, needs_1099: needs, decided: !!(v && v.needs_1099 !== null), note: v ? v.note || '' : '' };
   }).sort((a, b) => b.paid - a.paid);
 }
@@ -179,7 +181,7 @@ async function taxSummary(b, req, ctx) {
     { key: 'method', title: 'No payment method', ok: !nomethod.length, count: nomethod.length, cents: sumOf(nomethod),
       hint: 'Card, check, Zelle, bank or cash. It decides who reports the payment for 1099.' },
     { key: 'w9', title: '1099 vendors without a W-9', ok: !need1099.some((p) => !p.w9), count: need1099.filter((p) => !p.w9).length, cents: need1099.filter((p) => !p.w9).reduce((x, p) => x + p.paid, 0),
-      hint: 'Get a W-9 from everyone paid $600 or more (not by card), before January 31.' },
+      hint: `Get a W-9 from everyone paid ${limit1099Label(y)} or more (not by card), before January 31.` },
     { key: 'inventory', title: 'Inventory on Dec 31', ok: !purchases || invEntered, count: !purchases || invEntered ? 0 : 1, cents: 0,
       hint: 'Count what is still in stock on December 31 and enter its cost. Needed to work out the cost of goods sold.' },
     { key: 'review', title: 'Waiting for the accountant to decide', ok: !toDecide.length, count: toDecide.length, cents: sumOf(toDecide),
@@ -189,7 +191,7 @@ async function taxSummary(b, req, ctx) {
   ];
   const done = checks.filter((c) => c.ok).length;
   const out = {
-    year: y, from, to, part: parts.length === 1 && mine.length > 1 ? parts[0] : 'all', parts: mine,
+    year: y, limit_1099: limit1099(y), from, to, part: parts.length === 1 && mine.length > 1 ? parts[0] : 'all', parts: mine,
     ready: { done, total: checks.length, pct: Math.round((done / checks.length) * 100) },
     checks,
     income: incTotal,
