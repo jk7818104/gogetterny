@@ -888,6 +888,15 @@
         })(t0);
       });
     }
+    function fillSeg(sg, from, to, ms, id) {
+      var t0 = performance.now();
+      (function f(n) {
+        if (id !== runId) return;
+        var k = Math.min(1, (n - t0) / ms);
+        sg.style.setProperty('--p', (from + (to - from) * k).toFixed(3));
+        if (k < 1) requestAnimationFrame(f);
+      })(t0);
+    }
     function animT(el, ms, id) {
       var t0 = performance.now();
       (function f(n) {
@@ -958,10 +967,11 @@
           });
           for (var k = 0; k < si; k++) segs[k].style.setProperty('--p', 1);
           var inSec = frames.filter(function (x) { return x.sec === fr.sec; }), pos = inSec.indexOf(fr) + 1;
-          segs[si].style.setProperty('--p', (pos / inSec.length).toFixed(3));
-          // reading time: a steady base plus time per word
-          var dwell = Math.max(3400, Math.min(9500, 2200 + fr.words * 170));
-          if (fr.els.some(function (e) { return e.classList && e.classList.contains('tech'); })) dwell += 1500;
+          // reading time: a short base plus a little per word, so the tour keeps moving
+          var dwell = Math.max(2600, Math.min(5500, 1800 + fr.words * 60));
+          if (fr.els.some(function (e) { return e.classList && e.classList.contains('tech'); })) dwell += 1200;
+          // the bar fills while this screen is shown, so it is clear the tour is still playing
+          fillSeg(segs[si], (pos - 1) / inSec.length, pos / inSec.length, dwell, id);
           if (!(await wait(dwell, id))) return;
         }
         touring = false; root.classList.remove('tour');
