@@ -188,12 +188,15 @@ await test('CC processing: charge a saved card off-session and refuse a charge w
       create: async () => ({ id: 'cus_mock_123' }),
       listPaymentMethods: async () => ({ data: hasCard ? [{ id: 'pm_mock_123', customer: 'cus_mock_123', card: { brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 } }] : [] })
     },
+    checkout: { sessions: { create: async () => ({ url: 'https://checkout.stripe.com/test', expires_at: 2000000000 }) } },
     paymentIntents: {
       create: async (params) => { paymentCalls.push(params); return { id: 'pi_mock_123', status: 'succeeded' }; }
     }
   };
   try {
     const client = await op('clients.save', { name: 'CC regression test', email: 'cc-regression@example.com' });
+    const link = await op('cards.link', { client_id: client.id });
+    assert.match(link.url, /^https:\/\/checkout\.stripe\.com\//);
     const result = await op('charges.create', { client_id: client.id, amount_cents: 1250, description: 'Automated regression test' });
     assert.equal(result.ok, true);
     assert.equal(result.status, 'succeeded');
