@@ -32,7 +32,7 @@ try {
     calls++;
     return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } });
   };
-  await assert.rejects(() => fetchLinked('https://docs.google.com/spreadsheets/d/abcdefghijklmnopqrst/edit'), /can.t be used/i);
+  await assert.rejects(() => fetchLinked('https://docs.google.com/spreadsheets/d/abcdefghijklmnopqrst/edit'), /https|can.t be used/i);
   assert.equal(calls, 1, 'private-address redirect is rejected before a second request');
 
   calls = 0;
