@@ -14,7 +14,10 @@ export function directUrl(url) {
   try { u = new URL(String(url || '').trim()); } catch (e) { throw new HttpError(400, 'Paste the full link, starting with https://'); }
   if (u.protocol !== 'https:') throw new HttpError(400, 'The link must start with https://');
   const host = u.hostname.toLowerCase();
-  if (host === 'localhost' || /^[\d.]+$/.test(host) || host.includes(':') || host.endsWith('.local') || host.endsWith('.internal')) throw new HttpError(400, 'This link can\'t be used');
+  if (u.username || u.password || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.test') ||
+      /^[\d.]+$/.test(host) || host.includes(':') || host.endsWith('.local') || host.endsWith('.internal')) {
+    throw new HttpError(400, 'This link can\'t be used');
+  }
   // Google Sheets: the sheet as CSV (the tab that was open when the link was copied)
   const g = /^\/spreadsheets\/d\/([\w-]{20,})/.exec(u.pathname);
   if (host === 'docs.google.com' && g && g[1] !== 'e') {
@@ -35,11 +38,30 @@ export function directUrl(url) {
 }
 
 /** Read the linked file (at most 4 MB, 20 seconds). @param {string} url */
-async function fetchLinked(url) {
+export async function fetchLinked(url) {
   const ctl = new AbortController();
   const t = setTimeout(() => ctl.abort(), 20_000);
   try {
-    const r = await fetch(directUrl(url), { redirect: 'follow', signal: ctl.signal, headers: { 'User-Agent': 'Mozilla/5.0 (admin linked sheet)' } });
+    // Do not follow redirects automatically: validate every redirect target first.
+    let target = directUrl(url);
+    let r;
+    for (let hop = 0; hop <= 5; hop++) {
+      r = await fetch(target, {
+        redirect: 'manual',
+        signal: ctl.signal,
+        headers: { 'User-Agent': 'Mozilla/5.0 (admin linked sheet)' }
+      });
+      if (![301, 302, 303, 307, 308].includes(r.status)) break;
+      const location = r.headers.get('location');
+      if (r.body) await r.body.cancel().catch(() => {});
+      if (!location) throw new HttpError(400, 'The linked file returned an invalid redirect');
+      if (hop === 5) throw new HttpError(400, 'The linked file redirected too many times');
+      let next;
+      try { next = new URL(location, target).toString(); }
+      catch { throw new HttpError(400, 'The linked file returned an invalid redirect'); }
+      target = directUrl(next);
+    }
+    if (!r) throw new HttpError(400, 'The linked file could not be reached');
     if (r.status === 401 || r.status === 403 || r.status === 404) throw new HttpError(400, 'The sheet could not be opened. Share it as "Anyone with the link can view" and try again.');
     if (!r.ok) throw new HttpError(400, `The link answered with an error (${r.status}). Check it and try again.`);
     const buf = Buffer.from(await r.arrayBuffer());

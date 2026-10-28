@@ -10,10 +10,10 @@ import { sendSummary } from './_lib/summary.js';
 
 /** @param {import('http').IncomingMessage} req @param {import('http').ServerResponse} res */
 export default async function handler(req, res) {
-  // Vercel sends this header when CRON_SECRET is set. Without it, running early is harmless:
-  // each reminder goes out once, and only when it is due.
-  const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.authorization !== 'Bearer ' + secret) return send(res, 401, { error: 'unauthorized' });
+  // Never run scheduled jobs without an explicit shared secret.
+  const secret = process.env.CRON_SECRET || '';
+  if (!secret) return send(res, 503, { error: 'Cron is not configured' });
+  if (String(req.headers.authorization || '') !== 'Bearer ' + secret) return send(res, 401, { error: 'unauthorized' });
   if (!dbUrl()) return send(res, 200, { skipped: true });
   try {
     const bills = await runBillAlerts();   // works without Stripe or email (the bell still shows it)

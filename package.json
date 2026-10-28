@@ -16,6 +16,7 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
-    "test": "node test/smoke.mjs"
+    "test": "node test/smoke.mjs",
+    "test:security": "node test/security.mjs"
   }
 }
