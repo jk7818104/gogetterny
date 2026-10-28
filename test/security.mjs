@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import handler from '../api/cron.js';
 import { directUrl, fetchLinked } from '../api/_lib/links.js';
 import stripeWebhook from '../api/stripe-webhook.js';
+import { keysFrom } from '../api/mcp.js';
 
 async function hit(headers = {}) {
   const res = { statusCode: 200, headersOut: {}, setHeader(k, v) { this.headersOut[k.toLowerCase()] = v; }, end(body) { this.body = body; } };
@@ -51,6 +52,10 @@ try {
 }
 console.log('Security tests passed: GOGETTERINC cron and linked-sheet redirects.');
 
+
+
+assert.equal(keysFrom({ headers: {}, url: '/api/mcp?key=gg_12345678901234567890123456789012' }).length, 0, 'GO GETTER MCP rejects URL query keys');
+assert.deepEqual(keysFrom({ headers: { authorization: 'Bearer gg_12345678901234567890123456789012' }, url: '/api/mcp' }), ['gg_12345678901234567890123456789012'], 'GO GETTER MCP accepts Authorization header keys');
 
 // Stripe webhook must fail closed unless a signing secret and a valid signature exist.
 async function webhookHit({ signature = '', body = '{"id":"evt_12345678"}' } = {}) {
