@@ -2,6 +2,10 @@
 
 Set secrets in Vercel → Project → Settings → Environment Variables. Do not put secret values in source control, tickets, chat, or URLs.
 
+## API key handling
+
+- GO GETTER's MCP connector accepts keys only in `Authorization: Bearer …`, `X-API-Key`, `X-Account-Key`, or `X-GoGetter-Key` headers. URL query-string keys are intentionally rejected because URLs can be retained in logs and browser history. Update any connector configuration that previously appended `?key=`.
+
 ## Required for scheduled jobs
 
 - `CRON_SECRET`: a long, random secret. Vercel Cron sends it as `Authorization: Bearer <CRON_SECRET>`. Configure it for the intended environment(s), then redeploy.
