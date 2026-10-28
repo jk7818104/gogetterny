@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import handler from '../api/cron.js';
 import { directUrl, fetchLinked } from '../api/_lib/links.js';
+import stripeWebhook from '../api/stripe-webhook.js';
 
 async function hit(headers = {}) {
   const res = { statusCode: 200, headersOut: {}, setHeader(k, v) { this.headersOut[k.toLowerCase()] = v; }, end(body) { this.body = body; } };
@@ -49,3 +50,41 @@ try {
   globalThis.fetch = originalFetch;
 }
 console.log('Security tests passed: GOGETTERINC cron and linked-sheet redirects.');
+
+
+// Stripe webhook must fail closed unless a signing secret and a valid signature exist.
+async function webhookHit({ signature = '', body = '{"id":"evt_12345678"}' } = {}) {
+  const req = {
+    method: 'POST',
+    url: '/api/stripe-webhook',
+    headers: { 'stripe-signature': signature },
+    async *[Symbol.asyncIterator]() { yield Buffer.from(body); }
+  };
+  const res = { statusCode: 200, headersOut: {}, setHeader(k, v) { this.headersOut[k.toLowerCase()] = v; }, end(body) { this.body = body; } };
+  await stripeWebhook(req, res);
+  return { status: res.statusCode, data: JSON.parse(res.body) };
+}
+process.env.DATABASE_URL = 'postgres://test.invalid/test';
+process.env.STRIPE_SECRET_KEY = 'sk_test_unit_test';
+delete process.env.STRIPE_WEBHOOK_SECRET;
+assert.equal((await webhookHit({ signature: 't=1,v1=bad' })).status, 503, 'webhook fails closed without signing secret');
+process.env.STRIPE_WEBHOOK_SECRET = 'whsec_unit_test';
+assert.equal((await webhookHit()).status, 400, 'webhook rejects requests without Stripe-Signature');
+let signatureChecks = 0;
+globalThis.__ggStripe = {
+  webhooks: {
+    constructEvent(raw, signature, secret) {
+      signatureChecks++;
+      assert.equal(raw.toString('utf8'), '{"id":"evt_12345678"}');
+      assert.equal(signature, 't=1,v1=bad');
+      assert.equal(secret, 'whsec_unit_test');
+      throw new Error('signature mismatch');
+    }
+  }
+};
+assert.equal((await webhookHit({ signature: 't=1,v1=bad' })).status, 400, 'webhook rejects invalid Stripe signatures');
+assert.equal(signatureChecks, 1, 'raw request bytes are passed to Stripe verification');
+delete globalThis.__ggStripe;
+delete process.env.DATABASE_URL;
+delete process.env.STRIPE_SECRET_KEY;
+delete process.env.STRIPE_WEBHOOK_SECRET;
