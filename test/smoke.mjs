@@ -179,5 +179,40 @@ await test('linked sheets and the live feed link', async () => {
   assert.equal((await hit(exportApi, request('GET', `/api/export?feed=${token}&what=books`))).statusCode, 404);
 });
 
+await test('CC processing: charge a saved card off-session and refuse a charge without a card', async () => {
+  process.env.STRIPE_SECRET_KEY = 'sk_test_mock';
+  const paymentCalls = [];
+  let hasCard = true;
+  globalThis.__ggStripe = {
+    customers: {
+      create: async () => ({ id: 'cus_mock_123' }),
+      listPaymentMethods: async () => ({ data: hasCard ? [{ id: 'pm_mock_123', customer: 'cus_mock_123', card: { brand: 'visa', last4: '4242', exp_month: 12, exp_year: 2030 } }] : [] })
+    },
+    paymentIntents: {
+      create: async (params) => { paymentCalls.push(params); return { id: 'pi_mock_123', status: 'succeeded' }; }
+    }
+  };
+  try {
+    const client = await op('clients.save', { name: 'CC regression test', email: 'cc-regression@example.com' });
+    const result = await op('charges.create', { client_id: client.id, amount_cents: 1250, description: 'Automated regression test' });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, 'succeeded');
+    assert.equal(paymentCalls.length, 1);
+    assert.equal(paymentCalls[0].amount, 1250);
+    assert.equal(paymentCalls[0].currency, 'usd');
+    assert.equal(paymentCalls[0].customer, 'cus_mock_123');
+    assert.equal(paymentCalls[0].payment_method, 'pm_mock_123');
+    assert.equal(paymentCalls[0].off_session, true);
+    assert.equal(paymentCalls[0].confirm, true);
+
+    hasCard = false;
+    await fails('charges.create', { client_id: client.id, amount_cents: 1250, description: 'Must not be charged' });
+    assert.equal(paymentCalls.length, 1, 'a missing saved card must not call Stripe to charge');
+  } finally {
+    delete globalThis.__ggStripe;
+    delete process.env.STRIPE_SECRET_KEY;
+  }
+});
+
 console.log(passed + ' passed' + (process.exitCode ? ', some FAILED' : ''));
 process.exit();
