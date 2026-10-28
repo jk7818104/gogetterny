@@ -260,7 +260,7 @@ Before creating anything, say in one line what you will add. Use search to find 
 // Spaces, quotes and a missing "Bearer" are forgiven for compatibility with existing clients.
 const KEY_HEADERS = ['authorization', 'x-api-key', 'x-account-key', 'x-gogetter-key'];
 /** @param {any} req */
-function keysFrom(req) {
+export function keysFrom(req) {
   /** @type {string[]} */ const out = [];
   for (const h of KEY_HEADERS) {
     const v = req.headers[h];
