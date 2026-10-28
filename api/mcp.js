@@ -256,8 +256,8 @@ Before creating anything, say in one line what you will add. Use search to find 
 
 // ---------- the connection ----------
 /** @param {any} req */
-// The key may come as "Authorization: Bearer <key>", as an "x-api-key" / "x-account-key" header, or as ?key= on the URL.
-// Spaces, quotes and a missing "Bearer" are forgiven, so a sloppy paste still works.
+// API keys must be sent in a header, never in a URL where they can be logged or copied.
+// Spaces, quotes and a missing "Bearer" are forgiven for compatibility with existing clients.
 const KEY_HEADERS = ['authorization', 'x-api-key', 'x-account-key', 'x-gogetter-key'];
 /** @param {any} req */
 function keysFrom(req) {
@@ -274,7 +274,6 @@ function keysFrom(req) {
       }
     }
   }
-  try { const k = new URL(req.url || '', 'https://x').searchParams.get('key'); if (k && k.trim()) out.push(k.trim()); } catch (e) {}
   return out;
 }
 /** @param {any} req */
@@ -295,8 +294,8 @@ function authHint(req) {
     const v = req.headers[h];
     if (!v) return `${h}: none`;
     const s = String(v);
-    return `${h}: present (${s.length} chars${/^bearer\s/i.test(s.trim()) ? ', starts with "Bearer "' : /^bearer/i.test(s.trim()) ? ', starts with "Bearer" but no space' : ''}, ends …${s.trim().slice(-4)})`;
-  }).join('; ') + `; ?key: ${/[?&]key=/.test(req.url || '') ? 'present' : 'none'}`;
+    return `${h}: present (${s.length} chars${/^bearer\s/i.test(s.trim()) ? ', starts with "Bearer "' : /^bearer/i.test(s.trim()) ? ', starts with "Bearer" but no space' : ''})`;
+  }).join('; ') + '; URL query keys are not accepted';
 }
 
 /** @param {any} msg @param {any} ctx */
