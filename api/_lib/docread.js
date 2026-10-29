@@ -133,14 +133,8 @@ export async function rowsOf(buf, type) {
     return best || [];
   }
   if (type === 'application/vnd.ms-excel') {
-    try {
-      const XLSX = (await import('xlsx')).default;
-      const wb = XLSX.read(buf, { type: 'buffer', cellDates: true });
-      const ws = wb.SheetNames.map((n) => wb.Sheets[n]).find((w) => w && w['!ref']) || null;
-      if (!ws) return [];
-      const rows = /** @type {any[][]} */ (XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }));
-      return rows.slice(0, 20000).map((r) => r.map(cellText)).filter((r) => r.some((x) => x));
-    } catch (e) { throw new HttpError(400, 'This old Excel file could not be read. In Excel, choose File → Save As → .xlsx and upload that.'); }
+    // The old binary .xls format is no longer parsed (its only reader had unfixed security flaws). The file is still kept.
+    throw new HttpError(400, 'This old Excel file could not be read. In Excel, choose File → Save As → .xlsx and upload that.');
   }
   if (type === 'text/x-iif') return iifRows(buf.toString('utf8'));
   if (type === 'application/x-ofx') return ofxRows(buf.toString('utf8'));
